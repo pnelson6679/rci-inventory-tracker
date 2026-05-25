@@ -304,6 +304,37 @@
   .modal-body { padding: 16px; }
   .modal-close { background: none; border: none; font-size: 1.6rem; line-height: 1; cursor: pointer; color: var(--muted); padding: 4px 8px; }
 
+  /* ----- Photo upload (two-button layout) --------------------------------- */
+  .photo-btns { display: flex; gap: 10px; flex-wrap: wrap; }
+  .photo-btn-label {
+    flex: 1; min-width: 140px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: var(--tap); padding: 0 16px;
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    cursor: pointer; font-weight: 600; color: var(--muted);
+    transition: border-color .15s, background .15s; text-align: center;
+  }
+  .photo-btn-label:hover { border-color: var(--primary); background: #f1f5fb; color: var(--primary); }
+
+  /* ----- Vehicle picker (service picker modal) ---------------------------- */
+  .vehicle-pick-item {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 12px 14px; background: #fff; border: 1px solid var(--border);
+    border-radius: 10px; cursor: pointer; margin-bottom: 8px;
+    text-align: left; transition: background .12s, border-color .12s;
+  }
+  .vehicle-pick-item:hover { background: #f1f5fb; border-color: var(--primary); }
+  .vpi-icon { font-size: 1.3rem; flex-shrink: 0; }
+  .vpi-info { flex: 1; min-width: 0; }
+  .vpi-name { font-weight: 700; font-size: 1rem; }
+  .vpi-sub { color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ----- Service saved success modal ------------------------------------- */
+  .success-modal-body { text-align: center; padding: 36px 24px 28px; }
+  .success-icon { font-size: 3rem; margin-bottom: 14px; line-height: 1; }
+  .success-title { font-size: 1.3rem; font-weight: 800; margin-bottom: 10px; }
+  .success-msg { margin-bottom: 24px; }
+
   /* ----- Responsive ------------------------------------------------------- */
   @media (min-width: 600px) {
     .metrics { grid-template-columns: repeat(4, 1fr); }

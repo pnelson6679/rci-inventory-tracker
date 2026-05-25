@@ -1,8 +1,12 @@
-# CI/CD placeholder — pushes Apps Script source via clasp on merge to main.
+# CI/CD — pushes Apps Script source and redeploys to the fixed web app URL on every
+# merge to main.
 #
-# This requires a clasp auth token stored as a GitHub secret (CLASP_CREDENTIALS),
-# generated locally with `clasp login` then copying ~/.clasprc.json. Wire this up
-# only after the first manual `clasp push` succeeds.
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#   CLASP_CREDENTIALS  — contents of ~/.clasprc.json after running `clasp login` locally
+#   CLASP_SCRIPT_ID    — the scriptId from .clasp.json
+#
+# The deployment ID is read from the committed .deployment-id file (no secret needed
+# because the deployment ID is not sensitive — it's already embedded in the public URL).
 name: Deploy to Apps Script
 
 on:
@@ -30,14 +34,34 @@ jobs:
         env:
           CLASP_CREDENTIALS: ${{ secrets.CLASP_CREDENTIALS }}
 
-      # .clasp.json is git-ignored, so recreate it from a secret holding the script ID.
+      # .clasp.json is git-ignored; recreate it from secrets.
       - name: Restore .clasp.json
         run: |
-          echo '{"scriptId":"${{ secrets.CLASP_SCRIPT_ID }}","rootDir":"./src"}' > .clasp.json
+          echo '{
+            "scriptId": "${{ secrets.CLASP_SCRIPT_ID }}",
+            "rootDir": "./src",
+            "scriptExtensions": [".js", ".gs"],
+            "htmlExtensions": [".html"],
+            "jsonExtensions": [".json"]
+          }' > .clasp.json
 
       - name: Push to Apps Script
         run: clasp push --force
 
-      # Optional: promote to a new web-app version.
-      # - name: Deploy new version
-      #   run: clasp deploy --description "CI deploy ${{ github.sha }}"
+      # Deploy to the same URL every time by updating the pinned deployment ID.
+      # .deployment-id is committed to the repo so CI and local release.sh agree.
+      - name: Deploy to fixed URL
+        run: |
+          if [ -f .deployment-id ]; then
+            DEPLOYMENT_ID="$(cat .deployment-id)"
+            echo "Updating deployment $DEPLOYMENT_ID..."
+            clasp deploy \
+              --deploymentId "$DEPLOYMENT_ID" \
+              --description "CI release: ${{ github.sha }}"
+            echo "Deployed. Web app URL:"
+            clasp deployments | grep "$DEPLOYMENT_ID" || true
+          else
+            echo "No .deployment-id file found."
+            echo "Run './release.sh' locally first to create the initial deployment and commit the ID."
+            exit 1
+          fi

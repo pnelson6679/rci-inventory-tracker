@@ -1,0 +1,15 @@
+{
+  "name": "rci-inventory-tracker",
+  "version": "1.0.0",
+  "description": "RCI fleet inventory tracker — AppScript + BigQuery",
+  "scripts": {
+    "release": "bash release.sh",
+    "push": "clasp push --force",
+    "pull": "clasp pull",
+    "logs": "clasp logs --watch",
+    "open": "clasp open"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

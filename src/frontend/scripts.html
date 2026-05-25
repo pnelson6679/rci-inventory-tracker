@@ -615,13 +615,12 @@
 
       var photos = pendingPhotos($('#log-body'));
 
-      // Upload all photos first, collect URLs, then insert the record.
+      // Upload all photos first (compressed client-side), collect URLs, then save record.
       uploadAll(v.id, photos).then(function (urls) {
         record.photo_urls = JSON.stringify(urls);
         return RCI.logService(record);
       }).then(function () {
-        toast('Service logged.');
-        navigate('detail', { id: v.id });
+        showServiceSuccessModal(v.id, v.name);
       }).catch(function (e) {
         btn.disabled = false; btn.textContent = 'Submit Service Record';
         fail(e);
@@ -660,12 +659,19 @@
 
     function photoField(mode) {
       var multi = mode === 'multi';
+      var multiAttr = multi ? ' multiple' : '';
       return '<div class="form-group">' +
         '<label>' + (multi ? 'Photos' : 'Photo') + '</label>' +
-        '<label class="photo-drop" data-photo-drop>' +
-          '📷 Tap to ' + (multi ? 'add photos' : 'add a photo') + ' (camera or library)' +
-          '<input class="photo-input" type="file" accept="image/*" capture="environment"' + (multi ? ' multiple' : '') + ' data-photo-input>' +
-        '</label>' +
+        '<div class="photo-btns">' +
+          '<label class="photo-btn-label">' +
+            '📷 Camera' +
+            '<input class="photo-input" type="file" accept="image/*" capture="environment"' + multiAttr + ' data-photo-input>' +
+          '</label>' +
+          '<label class="photo-btn-label">' +
+            '📁 Upload from Device' +
+            '<input class="photo-input" type="file" accept="image/*"' + multiAttr + ' data-photo-input>' +
+          '</label>' +
+        '</div>' +
         '<div class="photo-previews" data-photo-previews></div>' +
       '</div>';
     }
@@ -675,23 +681,27 @@
 
     function wirePhotoField(container, multi) {
       photoStore.set(container, []);
-      var input = container.querySelector('[data-photo-input]');
+      var inputs = Array.prototype.slice.call(container.querySelectorAll('[data-photo-input]'));
       var previews = container.querySelector('[data-photo-previews]');
-      if (!input) return;
+      if (!inputs.length) return;
 
-      input.addEventListener('change', function () {
-        var files = Array.prototype.slice.call(input.files || []);
-        var store = photoStore.get(container);
-        if (!multi) { store.length = 0; previews.innerHTML = ''; }
-        files.forEach(function (file) {
-          if (!/^image\//.test(file.type)) return;
-          readFileAsDataUrl(file).then(function (dataUrl) {
-            var item = { name: file.name || ('photo_' + Date.now() + '.jpg'), dataUrl: dataUrl };
-            store.push(item);
-            addPreview(previews, store, item);
+      inputs.forEach(function (input) {
+        input.addEventListener('change', function () {
+          var files = Array.prototype.slice.call(input.files || []);
+          var store = photoStore.get(container);
+          if (!multi) { store.length = 0; previews.innerHTML = ''; }
+          files.forEach(function (file) {
+            if (!/^image\//.test(file.type)) return;
+            readFileAsDataUrl(file).then(function (dataUrl) {
+              return compressImage(dataUrl, 1200, 0.78);
+            }).then(function (compressed) {
+              var item = { name: file.name || ('photo_' + Date.now() + '.jpg'), dataUrl: compressed };
+              store.push(item);
+              repaintPreviews(previews, store);
+            });
           });
+          input.value = ''; // allow re-selecting the same file
         });
-        input.value = ''; // allow re-selecting the same file
       });
 
       previews.addEventListener('click', function (e) {
@@ -721,6 +731,28 @@
         fr.onload = function () { resolve(fr.result); };
         fr.onerror = reject;
         fr.readAsDataURL(file);
+      });
+    }
+
+    // Resize + re-encode to JPEG to keep uploads well under google.script.run's
+    // ~1 MB per-argument limit. Falls back to the original if anything fails.
+    function compressImage(dataUrl, maxWidth, quality) {
+      return new Promise(function (resolve) {
+        try {
+          var img = new Image();
+          img.onload = function () {
+            try {
+              var w = img.width, h = img.height;
+              if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth; }
+              var canvas = document.createElement('canvas');
+              canvas.width = w; canvas.height = h;
+              canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+              resolve(canvas.toDataURL('image/jpeg', quality || 0.78));
+            } catch (ex) { resolve(dataUrl); }
+          };
+          img.onerror = function () { resolve(dataUrl); };
+          img.src = dataUrl;
+        } catch (ex) { resolve(dataUrl); }
       });
     }
 
@@ -812,6 +844,88 @@
     function closeModal() { setHTML('#modal-root', ''); }
 
     /* -------------------------------------------------------------------- */
+    /* Service Picker modal (+ Add Service nav button)                       */
+    /* -------------------------------------------------------------------- */
+    function openServicePickerModal() {
+      setHTML('#modal-root',
+        '<div class="modal-backdrop" data-modal-backdrop>' +
+          '<div class="modal">' +
+            '<div class="modal-head">' +
+              '<h3>Add Service — Select Vehicle</h3>' +
+              '<button class="modal-close" data-modal-close>×</button>' +
+            '</div>' +
+            '<div class="modal-body">' +
+              '<input id="service-picker-search" class="search-input" type="search" placeholder="Search vehicles…" autocomplete="off" style="margin-bottom:14px">' +
+              '<div id="service-picker-list">' + spinner('Loading vehicles…') + '</div>' +
+              '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--card-line)">' +
+                '<button class="btn btn-secondary btn-block" data-action="nav-add-vehicle">+ Add New Vehicle</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+
+      var allVehicles = [];
+
+      function renderPickerList(vehicles) {
+        var el = document.getElementById('service-picker-list');
+        if (!el) return;
+        if (!vehicles.length) {
+          el.innerHTML = '<p class="muted" style="text-align:center;padding:16px">No vehicles found.</p>';
+          return;
+        }
+        el.innerHTML = vehicles.map(function (v) {
+          var sub = [v.year, v.make, v.model].filter(Boolean).join(' ');
+          return '<button class="vehicle-pick-item" data-action="pick-vehicle-for-service" data-id="' + escapeHtml(v.id) + '">' +
+            '<span class="vpi-icon">' + typeIcon(v.type) + '</span>' +
+            '<div class="vpi-info">' +
+              '<div class="vpi-name">' + escapeHtml(v.name) + '</div>' +
+              (sub ? '<div class="vpi-sub">' + escapeHtml(sub) + '</div>' : '') +
+            '</div>' +
+            statusBadge(v.status) +
+          '</button>';
+        }).join('');
+      }
+
+      RCI.listVehicles({ lifecycle: 'active' }).then(function (vehicles) {
+        allVehicles = vehicles || [];
+        renderPickerList(allVehicles);
+        var searchEl = document.getElementById('service-picker-search');
+        if (searchEl) {
+          searchEl.addEventListener('input', function () {
+            var q = searchEl.value.toLowerCase().trim();
+            var filtered = q ? allVehicles.filter(function (v) {
+              return (v.name || '').toLowerCase().indexOf(q) >= 0 ||
+                     (v.make || '').toLowerCase().indexOf(q) >= 0 ||
+                     (v.model || '').toLowerCase().indexOf(q) >= 0;
+            }) : allVehicles;
+            renderPickerList(filtered);
+          });
+          searchEl.focus();
+        }
+      }).catch(function () {
+        var el = document.getElementById('service-picker-list');
+        if (el) el.innerHTML = '<p class="muted" style="text-align:center;padding:16px">Could not load vehicles.</p>';
+      });
+    }
+
+    /* Success modal shown after saving a service record */
+    function showServiceSuccessModal(vehicleId, vehicleName) {
+      setHTML('#modal-root',
+        '<div class="modal-backdrop">' +
+          '<div class="modal">' +
+            '<div class="modal-body success-modal-body">' +
+              '<div class="success-icon">✅</div>' +
+              '<h3 class="success-title">Service Record Saved!</h3>' +
+              '<p class="muted success-msg">The service record for <strong>' + escapeHtml(vehicleName || 'this vehicle') + '</strong> has been saved.</p>' +
+              '<button class="btn btn-accent btn-block btn-lg" data-action="goto-vehicle-after-service" data-id="' + escapeHtml(vehicleId) + '">View Vehicle</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    /* -------------------------------------------------------------------- */
     /* Retire / reactivate a vehicle (soft delete)                          */
     /* -------------------------------------------------------------------- */
     function setVehicleLifecycle(id, status) {
@@ -849,6 +963,10 @@
           case 'cancel-form':  navigate(editingVehicle ? 'detail' : 'fleet',
                                         editingVehicle ? { id: editingVehicle.id } : null); return;
           case 'back-to-detail': navigate('detail', { id: currentVehicleId }); return;
+          case 'open-service-picker': openServicePickerModal(); return;
+          case 'pick-vehicle-for-service': closeModal(); navigate('log', { id: id }); return;
+          case 'nav-add-vehicle': closeModal(); navigate('add'); return;
+          case 'goto-vehicle-after-service': closeModal(); navigate('detail', { id: id }); return;
           case 'toggle-record':
             var rec = actionEl.closest('.record');
             rec.classList.toggle('open');
