@@ -74,6 +74,15 @@ function updateVehicle(vehicle) {
 }
 
 /**
+ * Retires or reactivates a vehicle (soft delete). `status` is 'active' or 'inactive'.
+ * Inactive vehicles keep their full service history but drop out of the dashboard
+ * and the default fleet view.
+ */
+function setVehicleStatus(vehicleId, status) {
+  return BQ_setVehicleStatus(vehicleId, status);
+}
+
+/**
  * Logs a service record. Server-side this should also:
  *   - bump vehicles.current_reading if odometer_at_service is higher
  *   - recalculate next_due_date / next_due_reading on all active rules

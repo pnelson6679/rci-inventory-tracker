@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <base target="_top">
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>RCI Inventory Tracker</title>
     <?!= include('frontend/styles'); ?>
   </head>
   <body>
-    <!-- App shell. The HTML Expert builds out Dashboard / Fleet / Vehicle Detail / forms.
-         Mobile-first: this single page swaps views client-side. -->
+    <!-- Single-page app shell. Views swap client-side (see frontend/scripts).
+         Mobile-first. Five views: dashboard, fleet, detail, add (also edit), log. -->
     <header class="app-header">
       <h1>RCI Inventory Tracker</h1>
       <nav class="app-nav">
@@ -20,23 +20,60 @@
     </header>
 
     <main id="app-root">
-      <!-- Views render here. Placeholder until the HTML Expert wires it up. -->
-      <section id="view-dashboard" class="view active">
-        <p class="placeholder">Dashboard view — metric cards, fleet status list, recent activity.</p>
+      <!-- Global error banner (shown above whichever view is active). -->
+      <div id="error-banner" class="error-banner hidden" role="alert"></div>
+
+      <!-- DASHBOARD -->
+      <section id="view-dashboard" class="view active" aria-label="Dashboard">
+        <div id="dashboard-body"></div>
       </section>
-      <section id="view-fleet" class="view">
-        <p class="placeholder">Fleet view — search, filter chips, vehicle card grid.</p>
+
+      <!-- FLEET -->
+      <section id="view-fleet" class="view" aria-label="Fleet">
+        <div class="filters">
+          <input id="fleet-search" class="search-input" type="search"
+                 placeholder="Search name, make, model, or ID…" autocomplete="off">
+          <div class="chip-row" id="fleet-type-chips" data-group="type">
+            <button class="chip active" data-value="">All types</button>
+            <button class="chip" data-value="vehicle">Vehicles</button>
+            <button class="chip" data-value="machinery">Machinery</button>
+          </div>
+          <div class="chip-row" id="fleet-status-chips" data-group="status">
+            <button class="chip active" data-value="">All statuses</button>
+            <button class="chip" data-value="overdue">Overdue</button>
+            <button class="chip" data-value="due_soon">Due soon</button>
+            <button class="chip" data-value="up_to_date">Up to date</button>
+            <button class="chip" data-value="no_schedule">No schedule</button>
+          </div>
+          <div class="chip-row" id="fleet-lifecycle-chips" data-group="lifecycle">
+            <button class="chip active" data-value="active">Active</button>
+            <button class="chip" data-value="inactive">Inactive</button>
+            <button class="chip" data-value="all">All</button>
+          </div>
+        </div>
+        <div id="fleet-body"></div>
       </section>
-      <section id="view-detail" class="view">
-        <p class="placeholder">Vehicle detail — header, service schedule, service history.</p>
+
+      <!-- VEHICLE DETAIL -->
+      <section id="view-detail" class="view" aria-label="Vehicle detail">
+        <button class="back-link" data-back>&larr; Back</button>
+        <div id="detail-body"></div>
       </section>
-      <section id="view-add" class="view">
-        <p class="placeholder">Add / Edit vehicle form.</p>
+
+      <!-- ADD / EDIT VEHICLE -->
+      <section id="view-add" class="view" aria-label="Add or edit vehicle">
+        <div id="add-body"></div>
       </section>
-      <section id="view-log" class="view">
-        <p class="placeholder">Log service form (mobile-optimized, photo capture).</p>
+
+      <!-- LOG SERVICE -->
+      <section id="view-log" class="view" aria-label="Log service">
+        <div id="log-body"></div>
       </section>
     </main>
+
+    <!-- Global UI helpers -->
+    <div id="toast-wrap"></div>
+    <div id="modal-root"></div>
 
     <?!= include('frontend/scripts'); ?>
   </body>

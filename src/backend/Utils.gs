@@ -69,3 +69,64 @@ function sqlEscape_(value) {
   if (value === null || value === undefined) return null;
   return String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
+
+/* -------------------------------------------------------------------------- */
+/* Date helpers (used by status calc + schedule recalculation)                */
+/* -------------------------------------------------------------------------- */
+
+/** Today's date in the project timezone, as a BigQuery DATE string (yyyy-MM-dd). */
+function todayStr_() {
+  return Utilities.formatDate(new Date(), CONFIG_TZ_(), 'yyyy-MM-dd');
+}
+
+/** First day of the current month in the project timezone (yyyy-MM-01). */
+function monthStartStr_() {
+  return Utilities.formatDate(new Date(), CONFIG_TZ_(), 'yyyy-MM') + '-01';
+}
+
+/**
+ * Adds a whole number of months to a yyyy-MM-dd date string, clamping the day to
+ * the last valid day of the target month (e.g. Jan 31 + 1 month -> Feb 28/29).
+ * @param {string} dateStr  'yyyy-MM-dd'
+ * @param {number} months   Integer months to add (rounded).
+ * @return {string} 'yyyy-MM-dd'
+ */
+function addMonths_(dateStr, months) {
+  var p = String(dateStr).split('-');
+  var y = parseInt(p[0], 10);
+  var m = parseInt(p[1], 10) - 1; // 0-based
+  var d = parseInt(p[2], 10);
+
+  var add = Math.round(Number(months) || 0);
+  var total = m + add;
+  var targetYear = y + Math.floor(total / 12);
+  var targetMonth = ((total % 12) + 12) % 12; // 0-based, always positive
+
+  // Clamp day to the last day of the target month.
+  var lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  var day = Math.min(d, lastDay);
+
+  var dt = new Date(Date.UTC(targetYear, targetMonth, day));
+  return Utilities.formatDate(dt, 'UTC', 'yyyy-MM-dd');
+}
+
+/**
+ * Whole-day difference (b - a) between two yyyy-MM-dd date strings.
+ * Positive when b is later than a.
+ * @return {number}
+ */
+function daysBetween_(aStr, bStr) {
+  var a = _parseDateUtc(aStr);
+  var b = _parseDateUtc(bStr);
+  return Math.round((b - a) / 86400000);
+}
+
+/** Parse a yyyy-MM-dd string to a UTC-midnight Date. */
+function _parseDateUtc(dateStr) {
+  var p = String(dateStr).split('-');
+  return new Date(Date.UTC(
+    parseInt(p[0], 10),
+    parseInt(p[1], 10) - 1,
+    parseInt(p[2], 10)
+  ));
+}

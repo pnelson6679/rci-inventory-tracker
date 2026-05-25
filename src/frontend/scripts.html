@@ -1,26 +1,60 @@
 <script>
-  /* RCI Inventory Tracker — client-side glue.
-     Calls server functions via google.script.run. The HTML Expert builds the real
-     rendering; this scaffold proves the wiring and view-switching. */
+  /* ==========================================================================
+     RCI Inventory Tracker — client app
+     Vanilla JS. All server calls go through google.script.run (promisified).
+
+     ---------------------------------------------------------------------------
+     BACKEND CONTRACT (for the JS Engineer implementing BigQuery.gs)
+     Each window.RCI.* call resolves with the shape below, or rejects (the
+     failure handler) on error. No {success,error} envelope is needed — a
+     thrown server error surfaces in .catch().
+
+       getDashboard()  ->  {
+         metrics:  { total, overdue, due_soon, serviced_this_month },   // ints
+         fleet:    [ VehicleCard, ... ],     // sorted overdue → due_soon → rest
+         recentActivity: [ Activity, ... ]   // newest first, ~15 items
+       }
+
+       listVehicles({ type, status, search, lifecycle }) -> [ VehicleCard, ... ]
+         lifecycle: 'active' (default) | 'inactive' | 'all'
+
+       setVehicleStatus(id, 'active'|'inactive') -> getVehicle() payload
+
+       getVehicle(id) -> {
+         vehicle:   Vehicle,                 // full row
+         status:    'overdue'|'due_soon'|'up_to_date'|'no_schedule',
+         schedules: [ Rule, ... ],           // active rules only
+         records:   [ Record, ... ]          // newest first
+       }
+
+       addVehicle(Vehicle)      -> Vehicle (saved, incl. id)
+       updateVehicle(Vehicle)   -> Vehicle (must include id)
+       logService(Record)       -> Record  (saved)
+       saveScheduleRule(Rule)   -> Rule     (saved; id present = update)
+       uploadPhoto(vehicleId, dataUrl, filename) -> "https://drive…/view" (string)
+
+     VehicleCard = {
+       id, name, type ('vehicle'|'machinery'), make, model, year,
+       odometer_unit ('miles'|'hours'), current_reading,
+       status, last_service_date (ISO date|null),
+       lifecycle ('active'|'inactive'),
+       next_due_date (ISO date|null), next_due_reading (number|null)
+     }
+     Vehicle  = VehicleCard fields + vin_serial, license_plate, photo_url, notes
+     Record   = { id, vehicle_id, service_date, service_type, odometer_at_service,
+                  description, technician_name, photo_urls (JSON string OR array),
+                  created_at }
+     Rule     = { id?, vehicle_id, rule_label, interval_type
+                  ('time'|'mileage'|'hours'|'manual'), interval_value,
+                  next_due_date, next_due_reading, is_manual_flag, active }
+     ========================================================================== */
 
   (function () {
     'use strict';
 
-    // ----- simple view router -----
-    function showView(name) {
-      document.querySelectorAll('.view').forEach(function (v) {
-        v.classList.toggle('active', v.id === 'view-' + name);
-      });
-      document.querySelectorAll('.nav-btn').forEach(function (b) {
-        b.classList.toggle('active', b.dataset.view === name);
-      });
-    }
-
-    document.querySelectorAll('.nav-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () { showView(btn.dataset.view); });
-    });
-
-    // ----- server-call helper (promisified google.script.run) -----
+    /* -------------------------------------------------------------------- */
+    /* Server-call helper (promisified google.script.run)                   */
+    /* -------------------------------------------------------------------- */
     function callServer(fn, args) {
       return new Promise(function (resolve, reject) {
         google.script.run
@@ -30,14 +64,828 @@
       });
     }
 
-    // Expose for the HTML Expert's view code.
+    /* -------------------------------------------------------------------- */
+    /* Small DOM / format utilities                                         */
+    /* -------------------------------------------------------------------- */
+    function $(sel, root) { return (root || document).querySelector(sel); }
+    function setHTML(sel, html) { var n = $(sel); if (n) n.innerHTML = html; }
+
+    function escapeHtml(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // Accepts 'YYYY-MM-DD' or ISO timestamps; renders e.g. "May 25, 2026".
+    function fmtDate(s) {
+      if (!s) return '—';
+      var str = String(s);
+      var m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      var d = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(str);
+      if (isNaN(d)) return escapeHtml(str);
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function todayStr() {
+      var d = new Date();
+      var mm = String(d.getMonth() + 1).padStart(2, '0');
+      var dd = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + mm + '-' + dd;
+    }
+
+    function fmtReading(val, unit) {
+      if (val == null || val === '') return '—';
+      var n = Number(val);
+      var num = isNaN(n) ? val : n.toLocaleString();
+      return num + ' ' + (unit === 'hours' ? 'hrs' : 'mi');
+    }
+
+    function typeIcon(type) { return type === 'machinery' ? '🚜' : '🚚'; }
+
+    var STATUS_LABEL = {
+      overdue: 'Overdue', due_soon: 'Due Soon',
+      up_to_date: 'Up to Date', no_schedule: 'No Schedule'
+    };
+    function statusBadge(status) {
+      var s = status || 'no_schedule';
+      return '<span class="badge badge--' + s + '">' +
+             escapeHtml(STATUS_LABEL[s] || 'No Schedule') + '</span>';
+    }
+
+    // photo_urls may arrive as a JSON string or an array; normalize to array.
+    function parsePhotoUrls(val) {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      try { var a = JSON.parse(val); return Array.isArray(a) ? a : []; }
+      catch (e) { return String(val) ? [String(val)] : []; }
+    }
+
+    var SERVICE_TYPES = ['Oil Change', 'Tire Rotation', 'Inspection', 'Repair',
+                         'Fluid Check', 'Filter Replacement', 'Other'];
+
+    /* -------------------------------------------------------------------- */
+    /* Global UI: error banner, toast, spinner                              */
+    /* -------------------------------------------------------------------- */
+    function showError(msg) {
+      var el = $('#error-banner');
+      el.textContent = msg || 'Something went wrong.';
+      el.classList.remove('hidden');
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    function hideError() { $('#error-banner').classList.add('hidden'); }
+
+    function toast(msg, isError) {
+      var t = document.createElement('div');
+      t.className = 'toast' + (isError ? ' toast--error' : '');
+      t.textContent = msg;
+      $('#toast-wrap').appendChild(t);
+      setTimeout(function () { t.style.opacity = '0'; }, 2300);
+      setTimeout(function () { t.remove(); }, 2700);
+    }
+
+    function spinner(label) {
+      return '<div class="spinner">' + escapeHtml(label || 'Loading…') + '</div>';
+    }
+    function emptyState(msg) {
+      return '<div class="empty-state">' + escapeHtml(msg) + '</div>';
+    }
+
+    // Surface a rejected server call consistently.
+    function fail(err) {
+      var msg = (err && err.message) ? err.message : String(err || 'Server error');
+      showError(msg);
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* Router                                                               */
+    /* -------------------------------------------------------------------- */
+    var NAV_VIEWS = { dashboard: 1, fleet: 1, add: 1 }; // top-nav views
+
+    function navigate(name, params) {
+      hideError();
+      document.querySelectorAll('.view').forEach(function (v) {
+        v.classList.toggle('active', v.id === 'view-' + name);
+      });
+      document.querySelectorAll('.nav-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+      window.scrollTo(0, 0);
+
+      switch (name) {
+        case 'dashboard': renderDashboard(); break;
+        case 'fleet':     renderFleet(); break;
+        case 'detail':    renderDetail(params && params.id); break;
+        case 'add':       renderVehicleForm(params && params.id); break;
+        case 'log':       renderLogForm(params && params.id); break;
+      }
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* Shared card markup                                                   */
+    /* -------------------------------------------------------------------- */
+    function nextDueText(v) {
+      var bits = [];
+      if (v.next_due_date) bits.push(fmtDate(v.next_due_date));
+      if (v.next_due_reading != null && v.next_due_reading !== '')
+        bits.push(fmtReading(v.next_due_reading, v.odometer_unit));
+      return bits.length ? bits.join(' · ') : '—';
+    }
+
+    function vehicleCardHTML(v) {
+      var sub = [v.year, v.make, v.model].filter(Boolean).join(' ');
+      return '' +
+        '<button class="vehicle-card" data-action="open-vehicle" data-id="' + escapeHtml(v.id) + '">' +
+          '<div class="vc-top">' +
+            '<div>' +
+              '<div class="vc-name"><span class="type-icon">' + typeIcon(v.type) + '</span> ' + escapeHtml(v.name) + '</div>' +
+              (sub ? '<div class="vc-sub">' + escapeHtml(sub) + '</div>' : '') +
+            '</div>' +
+            (v.lifecycle === 'inactive'
+              ? '<span class="badge badge--no_schedule">Inactive</span>'
+              : statusBadge(v.status)) +
+          '</div>' +
+          '<div class="vc-meta">' +
+            '<span>Last serviced: <b>' + fmtDate(v.last_service_date) + '</b></span>' +
+            '<span>Next due: <b>' + nextDueText(v) + '</b></span>' +
+            '<span>Reading: <b>' + fmtReading(v.current_reading, v.odometer_unit) + '</b></span>' +
+          '</div>' +
+        '</button>';
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Dashboard                                                      */
+    /* -------------------------------------------------------------------- */
+    function renderDashboard() {
+      setHTML('#dashboard-body', spinner('Loading dashboard…'));
+      RCI.getDashboard().then(function (d) {
+        d = d || {};
+        var m = d.metrics || {};
+        var fleet = d.fleet || [];
+        var activity = d.recentActivity || [];
+
+        var metrics = '' +
+          '<div class="metrics">' +
+            metricTile(m.total, 'Total Vehicles', '') +
+            metricTile(m.overdue, 'Overdue', 'metric--overdue') +
+            metricTile(m.due_soon, 'Due Soon', 'metric--due') +
+            metricTile(m.serviced_this_month, 'Serviced This Month', 'metric--ok') +
+          '</div>';
+
+        var fleetList = fleet.length
+          ? '<div class="vehicle-grid">' + fleet.map(vehicleCardHTML).join('') + '</div>'
+          : emptyState('No vehicles yet. Tap “+ Add Vehicle” to get started.');
+
+        var feed = activity.length
+          ? '<div class="activity">' + activity.map(activityHTML).join('') + '</div>'
+          : emptyState('No service logged yet.');
+
+        $('#dashboard-body').innerHTML = metrics +
+          '<div class="dashboard-grid">' +
+            '<div>' +
+              '<div class="row-between"><h2 class="section-title">Fleet Status</h2></div>' +
+              fleetList +
+            '</div>' +
+            '<div>' +
+              '<h2 class="section-title">Recent Activity</h2>' +
+              '<div class="panel">' + feed + '</div>' +
+            '</div>' +
+          '</div>';
+      }).catch(function (e) {
+        setHTML('#dashboard-body', '');
+        fail(e);
+      });
+    }
+
+    function metricTile(num, label, cls) {
+      return '<div class="metric ' + cls + '">' +
+               '<div class="num">' + escapeHtml(num == null ? 0 : num) + '</div>' +
+               '<div class="lbl">' + escapeHtml(label) + '</div>' +
+             '</div>';
+    }
+
+    function activityHTML(a) {
+      return '<div class="activity-item">' +
+        '<div class="ai-main">' +
+          '<span class="ai-veh">' + escapeHtml(a.vehicle_name || 'Vehicle') + '</span> — ' +
+          escapeHtml(a.service_type || 'Service') +
+          (a.technician_name ? ' <span class="muted">by ' + escapeHtml(a.technician_name) + '</span>' : '') +
+        '</div>' +
+        '<div class="ai-date">' + fmtDate(a.service_date) + '</div>' +
+      '</div>';
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Fleet (search + filters)                                       */
+    /* -------------------------------------------------------------------- */
+    var fleetFilters = { type: '', status: '', search: '', lifecycle: 'active' };
+    var fleetSearchTimer = null;
+
+    function renderFleet() {
+      loadFleet();
+    }
+
+    function loadFleet() {
+      setHTML('#fleet-body', spinner('Loading fleet…'));
+      RCI.listVehicles(fleetFilters).then(function (rows) {
+        rows = rows || [];
+        $('#fleet-body').innerHTML = rows.length
+          ? '<div class="vehicle-grid">' + rows.map(vehicleCardHTML).join('') + '</div>'
+          : emptyState('No vehicles match these filters.');
+      }).catch(function (e) {
+        setHTML('#fleet-body', '');
+        fail(e);
+      });
+    }
+
+    function wireFleetControls() {
+      var search = $('#fleet-search');
+      if (search) {
+        search.addEventListener('input', function () {
+          fleetFilters.search = search.value.trim();
+          clearTimeout(fleetSearchTimer);
+          fleetSearchTimer = setTimeout(loadFleet, 300);
+        });
+      }
+      document.querySelectorAll('#view-fleet .chip-row').forEach(function (group) {
+        var key = group.dataset.group; // 'type' | 'status'
+        group.addEventListener('click', function (e) {
+          var chip = e.target.closest('.chip');
+          if (!chip) return;
+          group.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('active'); });
+          chip.classList.add('active');
+          fleetFilters[key] = chip.dataset.value || '';
+          loadFleet();
+        });
+      });
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Vehicle Detail                                                 */
+    /* -------------------------------------------------------------------- */
+    var currentVehicleId = null;
+
+    function renderDetail(id) {
+      if (id) currentVehicleId = id;
+      id = currentVehicleId;
+      if (!id) { navigate('fleet'); return; }
+
+      setHTML('#detail-body', spinner('Loading vehicle…'));
+      RCI.getVehicle(id).then(function (data) {
+        data = data || {};
+        var v = data.vehicle || {};
+        var status = data.status || 'no_schedule';
+        var schedules = (data.schedules || []).filter(function (r) { return r.active !== false; });
+        var records = data.records || [];
+
+        var photo = v.photo_url
+          ? '<img class="detail-photo" src="' + escapeHtml(v.photo_url) + '" alt="' + escapeHtml(v.name) + '">'
+          : '<div class="detail-photo detail-photo--placeholder">' + typeIcon(v.type) + '</div>';
+
+        var sub = [v.year, v.make, v.model].filter(Boolean).join(' ');
+        var isInactive = v.status === 'inactive';
+
+        var stats = '<div class="detail-stats">' +
+          stat('Current ' + (v.odometer_unit === 'hours' ? 'Hours' : 'Odometer'), fmtReading(v.current_reading, v.odometer_unit)) +
+          (v.vin_serial ? stat('VIN / Serial', escapeHtml(v.vin_serial)) : '') +
+          (v.license_plate ? stat('Plate / ID', escapeHtml(v.license_plate)) : '') +
+          stat('Type', v.type === 'machinery' ? 'Heavy Machinery' : 'Vehicle') +
+        '</div>';
+
+        var statusArea = isInactive
+          ? '<span class="badge badge--no_schedule">Inactive</span>'
+          : statusBadge(status);
+
+        var actions = isInactive
+          ? '<button class="btn btn-primary" data-action="reactivate-vehicle" data-id="' + escapeHtml(v.id) + '">Reactivate</button>' +
+            '<button class="btn btn-secondary" data-action="edit-vehicle" data-id="' + escapeHtml(v.id) + '">Edit Vehicle</button>'
+          : '<button class="btn btn-accent" data-action="log-service" data-id="' + escapeHtml(v.id) + '">+ Log Service</button>' +
+            '<button class="btn btn-secondary" data-action="edit-vehicle" data-id="' + escapeHtml(v.id) + '">Edit Vehicle</button>' +
+            '<button class="btn btn-danger" data-action="retire-vehicle" data-id="' + escapeHtml(v.id) + '">Mark Inactive</button>';
+
+        var inactiveNotice = isInactive
+          ? '<p class="muted" style="margin-top:10px">This vehicle is inactive — hidden from the dashboard and the default fleet view. Its service history is preserved.</p>'
+          : '';
+
+        var header = '<div class="panel panel--white">' +
+          '<div class="detail-header">' +
+            photo +
+            '<div class="detail-info">' +
+              '<div class="row-between">' +
+                '<div class="di-name">' + typeIcon(v.type) + ' ' + escapeHtml(v.name) + '</div>' +
+                statusArea +
+              '</div>' +
+              (sub ? '<div class="vc-sub">' + escapeHtml(sub) + '</div>' : '') +
+              stats +
+              (v.notes ? '<p class="muted" style="margin-top:10px">' + escapeHtml(v.notes) + '</p>' : '') +
+              inactiveNotice +
+              '<div class="form-actions">' + actions + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+        var schedule = '<div class="panel">' +
+          '<div class="row-between">' +
+            '<h2 class="section-title">Service Schedule</h2>' +
+            '<button class="btn btn-secondary" data-action="manage-schedule" data-id="' + escapeHtml(v.id) + '">Manage Schedule</button>' +
+          '</div>' +
+          (schedules.length ? schedules.map(function (r) { return ruleHTML(r, v); }).join('')
+                            : '<p class="muted">No schedule rules set. Tap “Manage Schedule” to add one.</p>') +
+        '</div>';
+
+        var history = '<div class="panel">' +
+          '<h2 class="section-title">Service History (' + records.length + ')</h2>' +
+          (records.length ? records.map(recordHTML).join('')
+                          : '<p class="muted">No service records yet.</p>') +
+        '</div>';
+
+        $('#detail-body').innerHTML = header + schedule + history;
+      }).catch(function (e) {
+        setHTML('#detail-body', '');
+        fail(e);
+      });
+    }
+
+    function stat(k, v) {
+      return '<div class="st"><span class="k">' + escapeHtml(k) + '</span>' +
+             '<span class="v">' + v + '</span></div>';
+    }
+
+    function ruleHTML(r, v) {
+      var detail, next, over = false;
+      if (r.is_manual_flag || r.interval_type === 'manual') {
+        detail = 'Manual flag';
+        next = 'Needs service';
+        over = true;
+      } else if (r.interval_type === 'time') {
+        detail = 'Every ' + escapeHtml(r.interval_value) + ' month(s)';
+        next = fmtDate(r.next_due_date);
+        over = r.next_due_date && new Date(r.next_due_date) < new Date(todayStr());
+      } else {
+        detail = 'Every ' + Number(r.interval_value).toLocaleString() + ' ' + (r.interval_type === 'hours' ? 'hrs' : 'mi');
+        next = fmtReading(r.next_due_reading, r.interval_type === 'hours' ? 'hours' : 'miles');
+        over = r.next_due_reading != null && Number(v.current_reading) > Number(r.next_due_reading);
+      }
+      return '<div class="rule">' +
+        '<div><div class="r-label">' + escapeHtml(r.rule_label || 'Service rule') + '</div>' +
+        '<div class="r-detail">' + detail + '</div></div>' +
+        '<div class="r-next' + (over ? ' over' : '') + '">' + next + '</div>' +
+      '</div>';
+    }
+
+    function recordHTML(rec) {
+      var photos = parsePhotoUrls(rec.photo_urls);
+      var photosHTML = photos.length
+        ? '<div class="record-photos">' + photos.map(function (u) {
+            return '<a href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' +
+                   '<img src="' + escapeHtml(u) + '" alt="service photo" loading="lazy"></a>';
+          }).join('') + '</div>'
+        : '';
+      var excerpt = (rec.description || '').replace(/\s+/g, ' ').slice(0, 80);
+      return '<div class="record">' +
+        '<button class="record-head" data-action="toggle-record">' +
+          '<span class="rh-date">' + fmtDate(rec.service_date) + '</span>' +
+          '<span class="badge badge--type rh-type">' + escapeHtml(rec.service_type || 'Service') + '</span>' +
+          '<span class="rh-excerpt">' + escapeHtml(excerpt) + '</span>' +
+          '<span class="rh-caret">▸</span>' +
+        '</button>' +
+        '<div class="record-body hidden">' +
+          '<div class="rb-row"><span class="k">Reading</span><div>' + fmtReading(rec.odometer_at_service, null) + '</div></div>' +
+          (rec.technician_name ? '<div class="rb-row"><span class="k">Technician</span><div>' + escapeHtml(rec.technician_name) + '</div></div>' : '') +
+          '<div class="rb-row"><span class="k">Work Done</span><div class="rb-desc">' + escapeHtml(rec.description || '—') + '</div></div>' +
+          photosHTML +
+        '</div>' +
+      '</div>';
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Add / Edit Vehicle                                             */
+    /* -------------------------------------------------------------------- */
+    var editingVehicle = null; // holds loaded vehicle when editing
+
+    function renderVehicleForm(id) {
+      editingVehicle = null;
+      if (!id) { paintVehicleForm(null); return; }
+      setHTML('#add-body', spinner('Loading vehicle…'));
+      RCI.getVehicle(id).then(function (data) {
+        editingVehicle = (data && data.vehicle) || null;
+        paintVehicleForm(editingVehicle);
+      }).catch(function (e) { setHTML('#add-body', ''); fail(e); });
+    }
+
+    function paintVehicleForm(v) {
+      v = v || {};
+      var isEdit = !!v.id;
+      var u = v.odometer_unit || 'miles';
+      $('#add-body').innerHTML =
+        '<h2 class="section-title">' + (isEdit ? 'Edit Vehicle' : 'Add Vehicle') + '</h2>' +
+        '<form id="vehicle-form" class="panel panel--white" novalidate>' +
+          field('Name / Nickname', 'v-name', 'text', v.name, true, 'e.g. Dozer #3, Ford F-350 – Blue') +
+          '<div class="form-row two">' +
+            selectField('Type', 'v-type', [['vehicle', 'Vehicle'], ['machinery', 'Heavy Machinery']], v.type || 'vehicle') +
+            selectField('Reading Unit', 'v-unit', [['miles', 'Miles'], ['hours', 'Hours']], u) +
+          '</div>' +
+          '<div class="form-row three">' +
+            field('Make', 'v-make', 'text', v.make) +
+            field('Model', 'v-model', 'text', v.model) +
+            field('Year', 'v-year', 'number', v.year) +
+          '</div>' +
+          '<div class="form-row two">' +
+            field('VIN / Serial', 'v-vin', 'text', v.vin_serial) +
+            field('License Plate / Equip. ID', 'v-plate', 'text', v.license_plate) +
+          '</div>' +
+          field('Current Reading', 'v-reading', 'number', v.current_reading, false, 'Odometer or hour meter at time of entry') +
+          photoField('single') +
+          '<div class="form-group"><label for="v-notes">Notes</label>' +
+            '<textarea id="v-notes" placeholder="Anything worth noting…">' + escapeHtml(v.notes || '') + '</textarea></div>' +
+          '<div class="form-actions">' +
+            '<button type="submit" class="btn btn-primary btn-lg">' + (isEdit ? 'Save Changes' : 'Save Vehicle') + '</button>' +
+            '<button type="button" class="btn btn-secondary" data-action="cancel-form">Cancel</button>' +
+          '</div>' +
+        '</form>';
+
+      wirePhotoField($('#add-body'), false);
+      $('#vehicle-form').addEventListener('submit', function (e) {
+        e.preventDefault();
+        submitVehicle(v);
+      });
+    }
+
+    function submitVehicle(existing) {
+      var name = $('#v-name').value.trim();
+      if (!name) { showError('Vehicle name is required.'); return; }
+
+      var payload = {
+        name: name,
+        type: $('#v-type').value,
+        make: $('#v-make').value.trim(),
+        model: $('#v-model').value.trim(),
+        year: $('#v-year').value ? parseInt($('#v-year').value, 10) : null,
+        vin_serial: $('#v-vin').value.trim(),
+        license_plate: $('#v-plate').value.trim(),
+        odometer_unit: $('#v-unit').value,
+        current_reading: $('#v-reading').value ? parseFloat($('#v-reading').value) : 0,
+        notes: $('#v-notes').value.trim()
+      };
+      if (existing && existing.id) {
+        payload.id = existing.id;
+        payload.photo_url = existing.photo_url || null;
+        payload.status = existing.status || 'active';
+      }
+
+      var btn = $('#vehicle-form button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Saving…';
+
+      var photos = pendingPhotos($('#add-body')); // 0 or 1 for vehicle
+
+      function done(saved) {
+        toast('Vehicle saved.');
+        navigate('detail', { id: saved.id });
+      }
+
+      var save = (existing && existing.id) ? RCI.updateVehicle : RCI.addVehicle;
+      save(payload).then(function (saved) {
+        saved = saved || payload;
+        if (!photos.length) { done(saved); return; }
+        // Upload the photo now that we have an id, then patch photo_url.
+        RCI.uploadPhoto(saved.id, photos[0].dataUrl, photos[0].name).then(function (url) {
+          saved.photo_url = url;
+          RCI.updateVehicle(saved).then(function () { done(saved); })
+            .catch(function () { done(saved); }); // vehicle saved; photo patch failed silently
+        }).catch(function () { toast('Vehicle saved (photo upload failed).', true); navigate('detail', { id: saved.id }); });
+      }).catch(function (e) {
+        btn.disabled = false;
+        btn.textContent = (existing && existing.id) ? 'Save Changes' : 'Save Vehicle';
+        fail(e);
+      });
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Log Service                                                    */
+    /* -------------------------------------------------------------------- */
+    function renderLogForm(id) {
+      if (id) currentVehicleId = id;
+      id = currentVehicleId;
+      if (!id) { navigate('fleet'); return; }
+
+      setHTML('#log-body', spinner('Loading…'));
+      RCI.getVehicle(id).then(function (data) {
+        var v = (data && data.vehicle) || { id: id, name: 'Vehicle' };
+        var unit = v.odometer_unit === 'hours' ? 'Hours' : 'Odometer';
+        $('#log-body').innerHTML =
+          '<button class="back-link" data-action="back-to-detail">&larr; ' + escapeHtml(v.name) + '</button>' +
+          '<h2 class="section-title">Log Service — ' + escapeHtml(v.name) + '</h2>' +
+          '<form id="log-form" class="panel panel--white" novalidate>' +
+            '<div class="form-row two">' +
+              field('Service Date', 'l-date', 'date', todayStr(), true) +
+              selectField('Service Type', 'l-type', SERVICE_TYPES.map(function (t) { return [t, t]; }), 'Oil Change') +
+            '</div>' +
+            field(unit + ' at Service', 'l-reading', 'number', v.current_reading, false, 'Current reading is ' + fmtReading(v.current_reading, v.odometer_unit)) +
+            '<div class="form-group"><label for="l-desc">Work Completed <span class="req">*</span></label>' +
+              '<textarea id="l-desc" placeholder="Describe what was done…" required></textarea></div>' +
+            field('Technician', 'l-tech', 'text', '', false, 'Who did the work') +
+            photoField('multi') +
+            '<div class="form-actions">' +
+              '<button type="submit" class="btn btn-accent btn-lg btn-block">Submit Service Record</button>' +
+            '</div>' +
+          '</form>';
+
+        wirePhotoField($('#log-body'), true);
+        $('#log-form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          submitLog(v);
+        });
+      }).catch(function (e) { setHTML('#log-body', ''); fail(e); });
+    }
+
+    function submitLog(v) {
+      var desc = $('#l-desc').value.trim();
+      if (!desc) { showError('Please describe the work completed.'); return; }
+
+      var record = {
+        vehicle_id: v.id,
+        service_date: $('#l-date').value || todayStr(),
+        service_type: $('#l-type').value,
+        odometer_at_service: $('#l-reading').value ? parseFloat($('#l-reading').value) : (v.current_reading || 0),
+        description: desc,
+        technician_name: $('#l-tech').value.trim()
+      };
+
+      var btn = $('#log-form button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Submitting…';
+
+      var photos = pendingPhotos($('#log-body'));
+
+      // Upload all photos first, collect URLs, then insert the record.
+      uploadAll(v.id, photos).then(function (urls) {
+        record.photo_urls = JSON.stringify(urls);
+        return RCI.logService(record);
+      }).then(function () {
+        toast('Service logged.');
+        navigate('detail', { id: v.id });
+      }).catch(function (e) {
+        btn.disabled = false; btn.textContent = 'Submit Service Record';
+        fail(e);
+      });
+    }
+
+    function uploadAll(vehicleId, photos) {
+      var urls = [];
+      return photos.reduce(function (chain, p) {
+        return chain.then(function () {
+          return RCI.uploadPhoto(vehicleId, p.dataUrl, p.name).then(function (url) { urls.push(url); });
+        });
+      }, Promise.resolve()).then(function () { return urls; });
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* Form field builders                                                  */
+    /* -------------------------------------------------------------------- */
+    function field(label, id, type, value, required, hint) {
+      return '<div class="form-group">' +
+        '<label for="' + id + '">' + escapeHtml(label) + (required ? ' <span class="req">*</span>' : '') + '</label>' +
+        '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value == null ? '' : value) + '"' +
+          (required ? ' required' : '') + (type === 'number' ? ' inputmode="decimal" step="any"' : '') + '>' +
+        (hint ? '<div class="hint">' + escapeHtml(hint) + '</div>' : '') +
+      '</div>';
+    }
+
+    function selectField(label, id, options, selected) {
+      var opts = options.map(function (o) {
+        return '<option value="' + escapeHtml(o[0]) + '"' + (o[0] === selected ? ' selected' : '') + '>' +
+               escapeHtml(o[1]) + '</option>';
+      }).join('');
+      return '<div class="form-group"><label for="' + id + '">' + escapeHtml(label) + '</label>' +
+             '<select id="' + id + '">' + opts + '</select></div>';
+    }
+
+    function photoField(mode) {
+      var multi = mode === 'multi';
+      return '<div class="form-group">' +
+        '<label>' + (multi ? 'Photos' : 'Photo') + '</label>' +
+        '<label class="photo-drop" data-photo-drop>' +
+          '📷 Tap to ' + (multi ? 'add photos' : 'add a photo') + ' (camera or library)' +
+          '<input class="photo-input" type="file" accept="image/*" capture="environment"' + (multi ? ' multiple' : '') + ' data-photo-input>' +
+        '</label>' +
+        '<div class="photo-previews" data-photo-previews></div>' +
+      '</div>';
+    }
+
+    // Per-form photo store, keyed by the container element.
+    var photoStore = new WeakMap();
+
+    function wirePhotoField(container, multi) {
+      photoStore.set(container, []);
+      var input = container.querySelector('[data-photo-input]');
+      var previews = container.querySelector('[data-photo-previews]');
+      if (!input) return;
+
+      input.addEventListener('change', function () {
+        var files = Array.prototype.slice.call(input.files || []);
+        var store = photoStore.get(container);
+        if (!multi) { store.length = 0; previews.innerHTML = ''; }
+        files.forEach(function (file) {
+          if (!/^image\//.test(file.type)) return;
+          readFileAsDataUrl(file).then(function (dataUrl) {
+            var item = { name: file.name || ('photo_' + Date.now() + '.jpg'), dataUrl: dataUrl };
+            store.push(item);
+            addPreview(previews, store, item);
+          });
+        });
+        input.value = ''; // allow re-selecting the same file
+      });
+
+      previews.addEventListener('click', function (e) {
+        var rm = e.target.closest('.rm');
+        if (!rm) return;
+        var store = photoStore.get(container);
+        var idx = parseInt(rm.dataset.idx, 10);
+        store.splice(idx, 1);
+        repaintPreviews(previews, store);
+      });
+    }
+
+    function addPreview(previews, store, item) {
+      repaintPreviews(previews, store);
+    }
+    function repaintPreviews(previews, store) {
+      previews.innerHTML = store.map(function (it, i) {
+        return '<div class="photo-thumb"><img src="' + it.dataUrl + '" alt="preview">' +
+               '<button type="button" class="rm" data-idx="' + i + '" aria-label="Remove">×</button></div>';
+      }).join('');
+    }
+    function pendingPhotos(container) { return photoStore.get(container) || []; }
+
+    function readFileAsDataUrl(file) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = reject;
+        fr.readAsDataURL(file);
+      });
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* Manage Schedule modal                                                */
+    /* -------------------------------------------------------------------- */
+    function openScheduleModal(vehicleId) {
+      setHTML('#modal-root', '<div class="modal-backdrop" data-modal-backdrop>' +
+        '<div class="modal"><div class="modal-head"><h3>Manage Service Schedule</h3>' +
+        '<button class="modal-close" data-modal-close>×</button></div>' +
+        '<div class="modal-body">' + spinner('Loading rules…') + '</div></div></div>');
+
+      RCI.getVehicle(vehicleId).then(function (data) {
+        var rules = (data && data.schedules || []).filter(function (r) { return r.active !== false; });
+        var listHTML = rules.length
+          ? rules.map(function (r) { return modalRuleHTML(r); }).join('')
+          : '<p class="muted">No rules yet. Add your first below.</p>';
+
+        $('.modal-body').innerHTML =
+          '<div id="rule-list">' + listHTML + '</div>' +
+          '<hr style="border:none;border-top:1px solid var(--card-line);margin:16px 0">' +
+          '<h4 style="margin-bottom:12px">Add a Rule</h4>' +
+          '<form id="rule-form" novalidate>' +
+            field('Rule Label', 'r-label', 'text', '', true, 'e.g. Oil Change Interval') +
+            selectField('Rule Type', 'r-type', [
+              ['time', 'Every X months'], ['mileage', 'Every X miles'],
+              ['hours', 'Every X hours'], ['manual', 'Manual “needs service” flag']
+            ], 'time') +
+            '<div class="form-group" id="r-value-group">' +
+              '<label for="r-value">Interval <span class="req">*</span></label>' +
+              '<input id="r-value" type="number" inputmode="decimal" step="any" placeholder="e.g. 3 or 5000">' +
+            '</div>' +
+            '<div class="form-actions">' +
+              '<button type="submit" class="btn btn-primary">Add Rule</button>' +
+            '</div>' +
+          '</form>';
+
+        var typeSel = $('#r-type');
+        var valGroup = $('#r-value-group');
+        typeSel.addEventListener('change', function () {
+          valGroup.classList.toggle('hidden', typeSel.value === 'manual');
+        });
+        $('#rule-form').addEventListener('submit', function (e) {
+          e.preventDefault();
+          addRule(vehicleId);
+        });
+      }).catch(function (e) { closeModal(); fail(e); });
+    }
+
+    function modalRuleHTML(r) {
+      var desc = (r.interval_type === 'manual' || r.is_manual_flag)
+        ? 'Manual flag'
+        : 'Every ' + escapeHtml(r.interval_value) + ' ' +
+          (r.interval_type === 'time' ? 'month(s)' : r.interval_type === 'hours' ? 'hrs' : 'mi');
+      return '<div class="rule">' +
+        '<div><div class="r-label">' + escapeHtml(r.rule_label || 'Rule') + '</div>' +
+        '<div class="r-detail">' + desc + '</div></div></div>';
+    }
+
+    function addRule(vehicleId) {
+      var label = $('#r-label').value.trim();
+      var type = $('#r-type').value;
+      var valEl = $('#r-value');
+      if (!label) { toast('Rule label is required.', true); return; }
+      var isManual = type === 'manual';
+      if (!isManual && (!valEl.value || parseFloat(valEl.value) <= 0)) {
+        toast('Enter a positive interval.', true); return;
+      }
+      var rule = {
+        vehicle_id: vehicleId,
+        rule_label: label,
+        interval_type: type,
+        interval_value: isManual ? null : parseFloat(valEl.value),
+        is_manual_flag: isManual,
+        active: true
+      };
+      var btn = $('#rule-form button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Adding…';
+      RCI.saveScheduleRule(rule).then(function () {
+        toast('Rule added.');
+        closeModal();
+        if (currentVehicleId === vehicleId) renderDetail(vehicleId);
+      }).catch(function (e) {
+        btn.disabled = false; btn.textContent = 'Add Rule';
+        toast((e && e.message) || 'Could not add rule.', true);
+      });
+    }
+
+    function closeModal() { setHTML('#modal-root', ''); }
+
+    /* -------------------------------------------------------------------- */
+    /* Retire / reactivate a vehicle (soft delete)                          */
+    /* -------------------------------------------------------------------- */
+    function setVehicleLifecycle(id, status) {
+      RCI.setVehicleStatus(id, status).then(function () {
+        toast(status === 'inactive' ? 'Vehicle marked inactive.' : 'Vehicle reactivated.');
+        renderDetail(id);
+      }).catch(fail);
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* Global event delegation                                              */
+    /* -------------------------------------------------------------------- */
+    document.addEventListener('click', function (e) {
+      // Modal close (backdrop or X)
+      if (e.target.closest('[data-modal-close]') ||
+          (e.target.matches && e.target.matches('[data-modal-backdrop]'))) {
+        closeModal(); return;
+      }
+
+      var actionEl = e.target.closest('[data-action]');
+      if (actionEl) {
+        var action = actionEl.dataset.action;
+        var id = actionEl.dataset.id;
+        switch (action) {
+          case 'open-vehicle': navigate('detail', { id: id }); return;
+          case 'log-service':  navigate('log', { id: id }); return;
+          case 'edit-vehicle': navigate('add', { id: id }); return;
+          case 'retire-vehicle':
+            if (window.confirm('Mark this vehicle inactive? It will be hidden from the dashboard and the default fleet view (switch the Fleet "Show" filter to Inactive or All to find it again). Service history is kept.')) {
+              setVehicleLifecycle(id, 'inactive');
+            }
+            return;
+          case 'reactivate-vehicle': setVehicleLifecycle(id, 'active'); return;
+          case 'manage-schedule': openScheduleModal(id); return;
+          case 'cancel-form':  navigate(editingVehicle ? 'detail' : 'fleet',
+                                        editingVehicle ? { id: editingVehicle.id } : null); return;
+          case 'back-to-detail': navigate('detail', { id: currentVehicleId }); return;
+          case 'toggle-record':
+            var rec = actionEl.closest('.record');
+            rec.classList.toggle('open');
+            rec.querySelector('.record-body').classList.toggle('hidden');
+            return;
+        }
+      }
+
+      // Top-nav buttons
+      var nav = e.target.closest('.nav-btn');
+      if (nav) { navigate(nav.dataset.view); return; }
+
+      // Detail "Back" link
+      if (e.target.closest('[data-back]')) {
+        navigate('fleet'); return;
+      }
+    });
+
+    // Close modal on Escape.
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeModal();
+    });
+
+    /* -------------------------------------------------------------------- */
+    /* Public API (kept compatible with the scaffold)                       */
+    /* -------------------------------------------------------------------- */
     window.RCI = {
-      showView: showView,
+      // navigation
+      navigate: navigate,
+      showView: navigate, // back-compat alias
+      // server calls
       getDashboard: function () { return callServer('getDashboard'); },
       listVehicles: function (filters) { return callServer('listVehicles', [filters]); },
       getVehicle: function (id) { return callServer('getVehicle', [id]); },
       addVehicle: function (v) { return callServer('addVehicle', [v]); },
       updateVehicle: function (v) { return callServer('updateVehicle', [v]); },
+      setVehicleStatus: function (id, status) { return callServer('setVehicleStatus', [id, status]); },
       logService: function (r) { return callServer('logService', [r]); },
       saveScheduleRule: function (rule) { return callServer('saveScheduleRule', [rule]); },
       uploadPhoto: function (vehicleId, dataUrl, filename) {
@@ -45,11 +893,12 @@
       }
     };
 
-    // ----- boot -----
+    /* -------------------------------------------------------------------- */
+    /* Boot                                                                 */
+    /* -------------------------------------------------------------------- */
     document.addEventListener('DOMContentLoaded', function () {
-      showView('dashboard');
-      // Smoke test once BQ_getDashboard is implemented:
-      // window.RCI.getDashboard().then(console.log).catch(console.error);
+      wireFleetControls();
+      navigate('dashboard');
     });
   })();
 </script>

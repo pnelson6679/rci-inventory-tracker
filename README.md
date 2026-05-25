@@ -79,11 +79,11 @@ cd "rci-inventory-tracker"
 git init
 git add .
 git commit -m "chore: initial project scaffold"
-gh repo create <github-user>/rci-inventory-tracker --private --source=. --push
+gh repo create pnelson6679/rci-inventory-tracker --private --source=. --push
 ```
 
 No `gh`? Create the repo in the web UI, then:
-`git remote add origin https://github.com/<github-user>/rci-inventory-tracker.git && git push -u origin main`
+`git remote add origin https://github.com/pnelson6679/rci-inventory-tracker.git && git push -u origin main`
 
 ### 3. Set up BigQuery
 
@@ -91,17 +91,17 @@ Enable the API once: https://console.cloud.google.com/apis/library/bigquery.goog
 
 ```bash
 # Create the dataset
-bq --project_id=<gcp-project-id> mk --dataset \
+bq --project_id=rci-inventory mk --dataset \
   --description "RCI Inventory Tracker dataset" \
   <gcp-project-id>:rci_inventory_tracker_db
 
 # Create the three tables from the schema files
-bq mk --table <gcp-project-id>:rci_inventory_tracker_db.vehicles          schema/vehicles.json
-bq mk --table <gcp-project-id>:rci_inventory_tracker_db.service_records   schema/service_records.json
-bq mk --table <gcp-project-id>:rci_inventory_tracker_db.service_schedules schema/service_schedules.json
+bq mk --table rci-inventory:rci_inventory_tracker_db.vehicles          schema/vehicles.json
+bq mk --table rci-inventory:rci_inventory_tracker_db.service_records   schema/service_records.json
+bq mk --table rci-inventory:rci_inventory_tracker_db.service_schedules schema/service_schedules.json
 
 # Verify
-bq ls <gcp-project-id>:rci_inventory_tracker_db
+bq ls rci-inventory:rci_inventory_tracker_db
 ```
 
 ### 4. Create the Drive photo folder
