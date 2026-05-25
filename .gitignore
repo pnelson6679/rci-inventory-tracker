@@ -1,0 +1,15 @@
+# clasp credentials & local auth — NEVER commit
+.clasp.json
+.clasprc.json
+.env
+
+# OS / editor junk
+.DS_Store
+*.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# node
+node_modules/
+npm-debug.log*

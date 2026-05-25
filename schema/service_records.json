@@ -1,0 +1,11 @@
+[
+  {"name": "id", "type": "STRING", "mode": "REQUIRED", "description": "UUID primary key"},
+  {"name": "vehicle_id", "type": "STRING", "mode": "REQUIRED", "description": "Foreign key to vehicles.id"},
+  {"name": "service_date", "type": "DATE", "mode": "REQUIRED", "description": "Date the service occurred"},
+  {"name": "service_type", "type": "STRING", "mode": "REQUIRED", "description": "e.g. Oil Change, Repair, Inspection"},
+  {"name": "odometer_at_service", "type": "FLOAT", "mode": "NULLABLE", "description": "Reading at time of service"},
+  {"name": "description", "type": "STRING", "mode": "NULLABLE", "description": "Full description of work completed"},
+  {"name": "technician_name", "type": "STRING", "mode": "NULLABLE", "description": "Who did the work"},
+  {"name": "photo_urls", "type": "STRING", "mode": "NULLABLE", "description": "JSON array of Google Drive photo URLs"},
+  {"name": "created_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the record was logged"}
+]

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RCI Inventory Tracker</title>
+    <?!= include('frontend/styles'); ?>
+  </head>
+  <body>
+    <!-- App shell. The HTML Expert builds out Dashboard / Fleet / Vehicle Detail / forms.
+         Mobile-first: this single page swaps views client-side. -->
+    <header class="app-header">
+      <h1>RCI Inventory Tracker</h1>
+      <nav class="app-nav">
+        <button data-view="dashboard" class="nav-btn active">Dashboard</button>
+        <button data-view="fleet" class="nav-btn">Fleet</button>
+        <button data-view="add" class="nav-btn">+ Add Vehicle</button>
+      </nav>
+    </header>
+
+    <main id="app-root">
+      <!-- Views render here. Placeholder until the HTML Expert wires it up. -->
+      <section id="view-dashboard" class="view active">
+        <p class="placeholder">Dashboard view — metric cards, fleet status list, recent activity.</p>
+      </section>
+      <section id="view-fleet" class="view">
+        <p class="placeholder">Fleet view — search, filter chips, vehicle card grid.</p>
+      </section>
+      <section id="view-detail" class="view">
+        <p class="placeholder">Vehicle detail — header, service schedule, service history.</p>
+      </section>
+      <section id="view-add" class="view">
+        <p class="placeholder">Add / Edit vehicle form.</p>
+      </section>
+      <section id="view-log" class="view">
+        <p class="placeholder">Log service form (mobile-optimized, photo capture).</p>
+      </section>
+    </main>
+
+    <?!= include('frontend/scripts'); ?>
+  </body>
+</html>

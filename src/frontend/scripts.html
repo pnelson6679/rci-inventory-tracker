@@ -1,0 +1,55 @@
+<script>
+  /* RCI Inventory Tracker — client-side glue.
+     Calls server functions via google.script.run. The HTML Expert builds the real
+     rendering; this scaffold proves the wiring and view-switching. */
+
+  (function () {
+    'use strict';
+
+    // ----- simple view router -----
+    function showView(name) {
+      document.querySelectorAll('.view').forEach(function (v) {
+        v.classList.toggle('active', v.id === 'view-' + name);
+      });
+      document.querySelectorAll('.nav-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+    }
+
+    document.querySelectorAll('.nav-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () { showView(btn.dataset.view); });
+    });
+
+    // ----- server-call helper (promisified google.script.run) -----
+    function callServer(fn, args) {
+      return new Promise(function (resolve, reject) {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)
+          [fn].apply(null, args || []);
+      });
+    }
+
+    // Expose for the HTML Expert's view code.
+    window.RCI = {
+      showView: showView,
+      getDashboard: function () { return callServer('getDashboard'); },
+      listVehicles: function (filters) { return callServer('listVehicles', [filters]); },
+      getVehicle: function (id) { return callServer('getVehicle', [id]); },
+      addVehicle: function (v) { return callServer('addVehicle', [v]); },
+      updateVehicle: function (v) { return callServer('updateVehicle', [v]); },
+      logService: function (r) { return callServer('logService', [r]); },
+      saveScheduleRule: function (rule) { return callServer('saveScheduleRule', [rule]); },
+      uploadPhoto: function (vehicleId, dataUrl, filename) {
+        return callServer('uploadPhoto', [vehicleId, dataUrl, filename]);
+      }
+    };
+
+    // ----- boot -----
+    document.addEventListener('DOMContentLoaded', function () {
+      showView('dashboard');
+      // Smoke test once BQ_getDashboard is implemented:
+      // window.RCI.getDashboard().then(console.log).catch(console.error);
+    });
+  })();
+</script>

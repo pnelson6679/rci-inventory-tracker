@@ -1,0 +1,14 @@
+[
+  {"name": "id", "type": "STRING", "mode": "REQUIRED", "description": "UUID primary key"},
+  {"name": "vehicle_id", "type": "STRING", "mode": "REQUIRED", "description": "Foreign key to vehicles.id"},
+  {"name": "rule_label", "type": "STRING", "mode": "NULLABLE", "description": "Human label (e.g. Oil Change Interval)"},
+  {"name": "interval_type", "type": "STRING", "mode": "REQUIRED", "description": "time, mileage, hours, or manual"},
+  {"name": "interval_value", "type": "FLOAT", "mode": "NULLABLE", "description": "e.g. 3 (months) or 5000 (miles)"},
+  {"name": "last_service_date", "type": "DATE", "mode": "NULLABLE", "description": "Date of last service that reset this rule"},
+  {"name": "last_service_reading", "type": "FLOAT", "mode": "NULLABLE", "description": "Odometer/hours at last service"},
+  {"name": "next_due_date", "type": "DATE", "mode": "NULLABLE", "description": "Calculated next due date (time-based rules)"},
+  {"name": "next_due_reading", "type": "FLOAT", "mode": "NULLABLE", "description": "Calculated next due reading (mileage/hour rules)"},
+  {"name": "is_manual_flag", "type": "BOOLEAN", "mode": "NULLABLE", "description": "True if this rule is a manual needs-service flag"},
+  {"name": "active", "type": "BOOLEAN", "mode": "REQUIRED", "description": "Whether this rule is currently enabled"},
+  {"name": "created_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the rule was created"}
+]

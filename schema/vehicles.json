@@ -1,0 +1,16 @@
+[
+  {"name": "id", "type": "STRING", "mode": "REQUIRED", "description": "UUID primary key"},
+  {"name": "name", "type": "STRING", "mode": "REQUIRED", "description": "Display name (e.g. Dozer #3)"},
+  {"name": "type", "type": "STRING", "mode": "REQUIRED", "description": "vehicle or machinery"},
+  {"name": "make", "type": "STRING", "mode": "NULLABLE", "description": "Manufacturer"},
+  {"name": "model", "type": "STRING", "mode": "NULLABLE", "description": "Model name"},
+  {"name": "year", "type": "INTEGER", "mode": "NULLABLE", "description": "Model year"},
+  {"name": "vin_serial", "type": "STRING", "mode": "NULLABLE", "description": "VIN or equipment serial number"},
+  {"name": "license_plate", "type": "STRING", "mode": "NULLABLE", "description": "Plate or equipment ID"},
+  {"name": "odometer_unit", "type": "STRING", "mode": "REQUIRED", "description": "miles or hours"},
+  {"name": "current_reading", "type": "FLOAT", "mode": "NULLABLE", "description": "Latest known odometer or hour reading"},
+  {"name": "photo_url", "type": "STRING", "mode": "NULLABLE", "description": "Google Drive URL for vehicle photo"},
+  {"name": "status", "type": "STRING", "mode": "REQUIRED", "description": "active or inactive"},
+  {"name": "notes", "type": "STRING", "mode": "NULLABLE", "description": "Free-text notes"},
+  {"name": "created_at", "type": "TIMESTAMP", "mode": "REQUIRED", "description": "When the record was added"}
+]

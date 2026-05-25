@@ -1,0 +1,43 @@
+# CI/CD placeholder — pushes Apps Script source via clasp on merge to main.
+#
+# This requires a clasp auth token stored as a GitHub secret (CLASP_CREDENTIALS),
+# generated locally with `clasp login` then copying ~/.clasprc.json. Wire this up
+# only after the first manual `clasp push` succeeds.
+name: Deploy to Apps Script
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install clasp
+        run: npm install -g @google/clasp
+
+      - name: Authenticate clasp
+        run: echo "$CLASP_CREDENTIALS" > ~/.clasprc.json
+        env:
+          CLASP_CREDENTIALS: ${{ secrets.CLASP_CREDENTIALS }}
+
+      # .clasp.json is git-ignored, so recreate it from a secret holding the script ID.
+      - name: Restore .clasp.json
+        run: |
+          echo '{"scriptId":"${{ secrets.CLASP_SCRIPT_ID }}","rootDir":"./src"}' > .clasp.json
+
+      - name: Push to Apps Script
+        run: clasp push --force
+
+      # Optional: promote to a new web-app version.
+      # - name: Deploy new version
+      #   run: clasp deploy --description "CI deploy ${{ github.sha }}"

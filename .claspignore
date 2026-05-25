@@ -1,0 +1,6 @@
+# Everything not matched here (relative to rootDir = ./src) is ignored by clasp push.
+# We push only .gs and .html source plus the manifest.
+**/**
+!appsscript.json
+!backend/**.gs
+!frontend/**.html
