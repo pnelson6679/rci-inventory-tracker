@@ -235,6 +235,14 @@
       var menu = document.getElementById('dashboard-nav-menu');
       if (menu) menu.classList.toggle('hidden');
     }
+    function closeAddDropdown() {
+      var menu = document.getElementById('add-nav-menu');
+      if (menu) menu.classList.add('hidden');
+    }
+    function toggleAddDropdown() {
+      var menu = document.getElementById('add-nav-menu');
+      if (menu) menu.classList.toggle('hidden');
+    }
 
     function navigate(name, params) {
       hideError();
@@ -251,13 +259,13 @@
         item.classList.toggle('active', item.dataset.view === name);
       });
 
-      // All other nav-btn elements (Add Vehicle).
-      document.querySelectorAll('.nav-btn:not(#dashboard-nav-btn)').forEach(function (b) {
-        b.classList.toggle('active', b.dataset.view === name);
-      });
+      // Add pill — highlight when on the add view.
+      var addBtn = document.getElementById('add-nav-btn');
+      if (addBtn) addBtn.classList.toggle('active', name === 'add');
 
-      // Close the dropdown whenever any navigation happens.
+      // Close dropdowns whenever any navigation happens.
       closeDashboardDropdown();
+      closeAddDropdown();
 
       window.scrollTo(0, 0);
 
@@ -1227,6 +1235,10 @@
       var dropWrap = document.getElementById('dashboard-nav-wrap');
       if (dropWrap && !dropWrap.contains(e.target)) closeDashboardDropdown();
 
+      // Close add dropdown on outside click.
+      var addWrap = document.getElementById('add-nav-wrap');
+      if (addWrap && !addWrap.contains(e.target)) closeAddDropdown();
+
       // Modal close (backdrop or X)
       if (e.target.closest('[data-modal-close]') ||
           (e.target.matches && e.target.matches('[data-modal-backdrop]'))) {
@@ -1240,6 +1252,8 @@
         switch (action) {
           case 'toggle-dashboard-dropdown': toggleDashboardDropdown(); return;
           case 'dropdown-navigate': navigate(actionEl.dataset.view); return;
+          case 'toggle-add-dropdown': toggleAddDropdown(); return;
+          case 'dropdown-add-vehicle': closeAddDropdown(); navigate('add'); return;
           case 'filter-fleet': navigateFleetWithFilter(actionEl.dataset.filterStatus); return;
           case 'goto-reports':
             navigate('reports', { date_from: actionEl.dataset.dateFrom || '' });
@@ -1269,7 +1283,7 @@
           case 'cancel-form':  navigate(editingVehicle ? 'detail' : 'fleet',
                                         editingVehicle ? { id: editingVehicle.id } : null); return;
           case 'back-to-detail': navigate('detail', { id: currentVehicleId }); return;
-          case 'open-service-picker': openServicePickerModal(); return;
+          case 'open-service-picker': closeAddDropdown(); openServicePickerModal(); return;
           case 'pick-vehicle-for-service': closeModal(); navigate('log', { id: id }); return;
           case 'nav-add-vehicle': closeModal(); navigate('add'); return;
           case 'goto-vehicle-after-service': closeModal(); navigate('detail', { id: id }); return;

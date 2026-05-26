@@ -59,8 +59,15 @@
             <button class="nav-drop-item" data-action="dropdown-navigate" data-view="reports">Reports</button>
           </div>
         </div>
-        <button data-view="add" class="nav-btn">+ Add Vehicle</button>
-        <button data-action="open-service-picker" class="nav-btn">+ Add Service</button>
+        <div class="nav-drop-wrap" id="add-nav-wrap">
+          <button id="add-nav-btn" class="nav-btn" data-action="toggle-add-dropdown">
+            + Add <span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-drop-menu hidden" id="add-nav-menu">
+            <button class="nav-drop-item" data-action="dropdown-add-vehicle">+ Add Vehicle</button>
+            <button class="nav-drop-item" data-action="open-service-picker">+ Add Service</button>
+          </div>
+        </div>
       </nav>
     </header>
 
