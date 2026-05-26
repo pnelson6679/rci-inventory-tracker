@@ -49,6 +49,7 @@
       <nav class="app-nav">
         <button data-view="dashboard" class="nav-btn active">Dashboard</button>
         <button data-view="fleet" class="nav-btn">Fleet</button>
+        <button data-view="reports" class="nav-btn">Reports</button>
         <button data-view="add" class="nav-btn">+ Add Vehicle</button>
         <button data-action="open-service-picker" class="nav-btn">+ Add Service</button>
       </nav>
@@ -103,6 +104,29 @@
       <!-- LOG SERVICE -->
       <section id="view-log" class="view" aria-label="Log service">
         <div id="log-body"></div>
+      </section>
+
+      <!-- SERVICE REPORTS -->
+      <section id="view-reports" class="view" aria-label="Service Reports">
+        <div class="filters">
+          <input id="reports-search" class="search-input" type="search"
+                 placeholder="Search vehicle, type, technician, notes…" autocomplete="off">
+          <div class="chip-row" id="reports-period-chips">
+            <button class="chip active" data-action="reports-period" data-period="all">All Time</button>
+            <button class="chip" data-action="reports-period" data-period="month">This Month</button>
+            <button class="chip" data-action="reports-period" data-period="30d">Last 30 Days</button>
+            <button class="chip" data-action="reports-period" data-period="year">This Year</button>
+          </div>
+          <div class="chip-row" id="reports-type-chips" data-group="reports_service_type">
+            <button class="chip active" data-value="">All service types</button>
+            <button class="chip" data-value="Oil Change">Oil Change</button>
+            <button class="chip" data-value="Inspection">Inspection</button>
+            <button class="chip" data-value="Repair">Repair</button>
+            <button class="chip" data-value="Tire Rotation">Tire Rotation</button>
+            <button class="chip" data-value="Other">Other</button>
+          </div>
+        </div>
+        <div id="reports-body"></div>
       </section>
     </main>
 

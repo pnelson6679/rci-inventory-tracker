@@ -320,6 +320,60 @@ function BQ_getVehicle(vehicleId) {
   };
 }
 
+/**
+ * Lists service records across the fleet with optional filters.
+ * Joins with vehicles so every row includes the vehicle name and type.
+ *
+ * @param {{vehicle_id?: string, date_from?: string, date_to?: string,
+ *           service_type?: string, search?: string}} filters
+ *   date_from / date_to: ISO date strings 'YYYY-MM-DD'
+ *   search: matched against vehicle name, service type, technician, description
+ * @return {Object[]} records newest-first, max 500
+ */
+function BQ_listServiceRecords(filters) {
+  filters = filters || {};
+  var where = [];
+  var params = [];
+
+  if (filters.vehicle_id) {
+    where.push('r.vehicle_id = @vid');
+    params.push(param_('vid', 'STRING', filters.vehicle_id));
+  }
+  if (filters.date_from) {
+    where.push('r.service_date >= @date_from');
+    params.push(param_('date_from', 'DATE', filters.date_from));
+  }
+  if (filters.date_to) {
+    where.push('r.service_date <= @date_to');
+    params.push(param_('date_to', 'DATE', filters.date_to));
+  }
+  if (filters.service_type) {
+    where.push('r.service_type = @stype');
+    params.push(param_('stype', 'STRING', filters.service_type));
+  }
+  if (filters.search) {
+    where.push(
+      '(LOWER(v.name) LIKE @q OR LOWER(IFNULL(r.service_type, "")) LIKE @q OR ' +
+      'LOWER(IFNULL(r.technician_name, "")) LIKE @q OR LOWER(IFNULL(r.description, "")) LIKE @q)'
+    );
+    params.push(param_('q', 'STRING', '%' + String(filters.search).toLowerCase() + '%'));
+  }
+
+  var whereSql = where.length ? (' WHERE ' + where.join(' AND ')) : '';
+  return bqRun_(
+    'SELECT r.id AS id, r.vehicle_id AS vehicle_id, v.name AS vehicle_name, ' +
+    'v.type AS vehicle_type, v.odometer_unit AS odometer_unit, ' +
+    'CAST(r.service_date AS STRING) AS service_date, r.service_type AS service_type, ' +
+    'r.odometer_at_service AS odometer_at_service, r.description AS description, ' +
+    'r.technician_name AS technician_name, r.photo_urls AS photo_urls, ' +
+    "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', r.created_at, 'UTC') AS created_at " +
+    'FROM ' + tableRef_('service_records') + ' r ' +
+    'JOIN ' + tableRef_('vehicles') + ' v ON r.vehicle_id = v.id' +
+    whereSql + ' ORDER BY r.service_date DESC, r.created_at DESC LIMIT 500',
+    params
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Write endpoints                                                            */
 /* -------------------------------------------------------------------------- */

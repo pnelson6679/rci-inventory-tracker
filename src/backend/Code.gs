@@ -139,3 +139,13 @@ function uploadPhoto(token, vehicleId, dataUrl, filename) {
   requireAuth_(token);
   return Drive_savePhoto(vehicleId, dataUrl, filename);
 }
+
+/**
+ * Lists service records across the fleet with optional filters.
+ * Supports filtering by vehicle_id, date_from, date_to, service_type, and a
+ * free-text search over vehicle name, type, technician, and description.
+ */
+function listServiceRecords(token, filters) {
+  requireAuth_(token);
+  return BQ_listServiceRecords(filters || {});
+}

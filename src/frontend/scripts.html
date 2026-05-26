@@ -117,6 +117,22 @@
       return d.getFullYear() + '-' + mm + '-' + dd;
     }
 
+    function monthStartStr() {
+      var d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01';
+    }
+
+    function yearStartStr() {
+      return new Date().getFullYear() + '-01-01';
+    }
+
+    // Returns the date N days ago as 'YYYY-MM-DD'.
+    function daysAgoStr(n) {
+      var d = new Date();
+      d.setDate(d.getDate() - n);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
     function fmtReading(val, unit) {
       if (val == null || val === '') return '—';
       var n = Number(val);
@@ -207,7 +223,7 @@
     /* -------------------------------------------------------------------- */
     /* Router                                                               */
     /* -------------------------------------------------------------------- */
-    var NAV_VIEWS = { dashboard: 1, fleet: 1, add: 1 }; // top-nav views
+    var NAV_VIEWS = { dashboard: 1, fleet: 1, reports: 1, add: 1 }; // top-nav views
 
     function navigate(name, params) {
       hideError();
@@ -222,6 +238,7 @@
       switch (name) {
         case 'dashboard': renderDashboard(); break;
         case 'fleet':     renderFleet(); break;
+        case 'reports':   renderReports(params); break;
         case 'detail':    renderDetail(params && params.id); break;
         case 'add':       renderVehicleForm(params && params.id); break;
         case 'log':       renderLogForm(params && params.id); break;
@@ -273,10 +290,11 @@
 
         var metrics = '' +
           '<div class="metrics">' +
-            metricTile(m.total, 'Total Vehicles', '') +
-            metricTile(m.overdue, 'Overdue', 'metric--overdue') +
-            metricTile(m.due_soon, 'Due Soon', 'metric--due') +
-            metricTile(m.serviced_this_month, 'Serviced This Month', 'metric--ok') +
+            metricTile(m.total, 'Total Vehicles', '', '') +
+            metricTile(m.overdue, 'Overdue', 'metric--overdue', 'overdue') +
+            metricTile(m.due_soon, 'Due Soon', 'metric--due', 'due_soon') +
+            metricTile(m.serviced_this_month, 'Serviced This Month', 'metric--ok',
+              { action: 'goto-reports', dateFrom: monthStartStr() }) +
           '</div>';
 
         var fleetList = fleet.length
@@ -304,11 +322,31 @@
       });
     }
 
-    function metricTile(num, label, cls) {
-      return '<div class="metric ' + cls + '">' +
-               '<div class="num">' + escapeHtml(num == null ? 0 : num) + '</div>' +
-               '<div class="lbl">' + escapeHtml(label) + '</div>' +
-             '</div>';
+    // opts can be:
+    //   a string            → shorthand for { action: 'filter-fleet', filterStatus: <string> }
+    //   { action, filterStatus?, dateFrom? }  → full options for any action
+    //   undefined/null      → non-clickable tile
+    function metricTile(num, label, cls, opts) {
+      var action, filterStatus, dateFrom;
+      if (opts === null || opts === undefined) {
+        // plain, non-clickable
+      } else if (typeof opts === 'string') {
+        action = 'filter-fleet'; filterStatus = opts;
+      } else {
+        action = opts.action; filterStatus = opts.filterStatus; dateFrom = opts.dateFrom;
+      }
+
+      var inner = '<div class="num">' + escapeHtml(num == null ? 0 : num) + '</div>' +
+                  '<div class="lbl">' + escapeHtml(label) + '</div>';
+
+      if (!action) {
+        return '<div class="metric ' + cls + '">' + inner + '</div>';
+      }
+
+      var dataAttrs = ' data-action="' + escapeHtml(action) + '"';
+      if (filterStatus != null) dataAttrs += ' data-filter-status="' + escapeHtml(filterStatus) + '"';
+      if (dateFrom != null)     dataAttrs += ' data-date-from="' + escapeHtml(dateFrom) + '"';
+      return '<button class="metric ' + cls + ' metric--clickable"' + dataAttrs + '>' + inner + '</button>';
     }
 
     function activityHTML(a) {
@@ -326,6 +364,31 @@
     /* VIEW: Fleet (search + filters)                                       */
     /* -------------------------------------------------------------------- */
     var fleetFilters = { type: '', status: '', search: '', lifecycle: 'active' };
+
+    // Navigate to the Fleet view with a pre-applied status filter.
+    // Resets all other filters so the user sees a clean, focused list.
+    function navigateFleetWithFilter(status) {
+      fleetFilters.type      = '';
+      fleetFilters.search    = '';
+      fleetFilters.lifecycle = 'active';
+      fleetFilters.status    = status || '';
+
+      // Sync the search input text if it's already in the DOM.
+      var searchEl = document.getElementById('fleet-search');
+      if (searchEl) searchEl.value = '';
+
+      // Sync chip active states for all three chip groups.
+      ['type', 'status', 'lifecycle'].forEach(function (group) {
+        var chipRow = document.querySelector('#view-fleet .chip-row[data-group="' + group + '"]');
+        if (!chipRow) return;
+        var target = fleetFilters[group];
+        chipRow.querySelectorAll('.chip').forEach(function (c) {
+          c.classList.toggle('active', (c.dataset.value || '') === target);
+        });
+      });
+
+      navigate('fleet');
+    }
     var fleetSearchTimer = null;
 
     function renderFleet() {
@@ -365,6 +428,145 @@
           loadFleet();
         });
       });
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* VIEW: Service Reports                                                */
+    /* -------------------------------------------------------------------- */
+    var reportsFilters = { search: '', service_type: '', date_from: '', date_to: '', period: 'all' };
+    var reportsSearchTimer = null;
+
+    // Maps a period key to { date_from, date_to } strings.
+    function periodDates(period) {
+      switch (period) {
+        case 'month': return { date_from: monthStartStr(), date_to: '' };
+        case '30d':   return { date_from: daysAgoStr(30),  date_to: '' };
+        case 'year':  return { date_from: yearStartStr(),  date_to: '' };
+        default:      return { date_from: '',              date_to: '' };
+      }
+    }
+
+    function renderReports(params) {
+      // Accept optional pre-set filters from a dashboard pill click.
+      if (params) {
+        if (params.date_from !== undefined) {
+          // Find which period chip matches, or fall back to 'all'.
+          var matched = 'all';
+          ['month', '30d', 'year'].forEach(function (p) {
+            if (periodDates(p).date_from === params.date_from) matched = p;
+          });
+          reportsFilters.period    = matched;
+          reportsFilters.date_from = params.date_from || '';
+          reportsFilters.date_to   = params.date_to   || '';
+        }
+        if (params.service_type !== undefined) reportsFilters.service_type = params.service_type;
+        if (params.search       !== undefined) reportsFilters.search       = params.search;
+      }
+      syncReportsFilterUI();
+      loadReports();
+    }
+
+    // Syncs the chip active states + search input text to match reportsFilters.
+    function syncReportsFilterUI() {
+      var searchEl = document.getElementById('reports-search');
+      if (searchEl) searchEl.value = reportsFilters.search;
+
+      // Period chips
+      var periodRow = document.getElementById('reports-period-chips');
+      if (periodRow) {
+        periodRow.querySelectorAll('[data-period]').forEach(function (c) {
+          c.classList.toggle('active', c.dataset.period === reportsFilters.period);
+        });
+      }
+
+      // Service-type chips
+      var typeRow = document.getElementById('reports-type-chips');
+      if (typeRow) {
+        typeRow.querySelectorAll('.chip').forEach(function (c) {
+          c.classList.toggle('active', (c.dataset.value || '') === reportsFilters.service_type);
+        });
+      }
+    }
+
+    function loadReports() {
+      setHTML('#reports-body', spinner('Loading service records…'));
+      var filters = {
+        search:       reportsFilters.search       || undefined,
+        service_type: reportsFilters.service_type || undefined,
+        date_from:    reportsFilters.date_from    || undefined,
+        date_to:      reportsFilters.date_to      || undefined
+      };
+      RCI.listServiceRecords(filters).then(function (rows) {
+        rows = rows || [];
+        if (!rows.length) {
+          setHTML('#reports-body', emptyState('No service records match these filters.'));
+          return;
+        }
+        var meta = '<div class="reports-meta">' + rows.length +
+                   (rows.length === 500 ? '+' : '') + ' record' +
+                   (rows.length !== 1 ? 's' : '') + '</div>';
+        $('#reports-body').innerHTML = meta +
+          '<div class="report-list">' + rows.map(reportRecordHTML).join('') + '</div>';
+      }).catch(function (e) {
+        setHTML('#reports-body', '');
+        fail(e);
+      });
+    }
+
+    function reportRecordHTML(r) {
+      var excerpt = (r.description || '').replace(/\s+/g, ' ').slice(0, 120);
+      var meta = [];
+      if (r.technician_name) meta.push('By: ' + r.technician_name);
+      if (r.odometer_at_service != null && r.odometer_at_service !== '')
+        meta.push('Reading: ' + fmtReading(r.odometer_at_service, r.odometer_unit));
+
+      return '<div class="report-record">' +
+        '<div class="rr-head">' +
+          '<button class="rr-vehicle" data-action="open-vehicle" data-id="' + escapeHtml(r.vehicle_id) + '">' +
+            typeIcon(r.vehicle_type) + ' ' + escapeHtml(r.vehicle_name || 'Vehicle') +
+          '</button>' +
+          '<div class="rr-right">' +
+            '<span class="badge badge--type">' + escapeHtml(r.service_type || 'Service') + '</span>' +
+            '<span class="rr-date">' + fmtDate(r.service_date) + '</span>' +
+          '</div>' +
+        '</div>' +
+        (excerpt ? '<div class="rr-desc">' + escapeHtml(excerpt) + (r.description && r.description.length > 120 ? '…' : '') + '</div>' : '') +
+        (meta.length ? '<div class="rr-meta">' + meta.map(escapeHtml).join(' · ') + '</div>' : '') +
+      '</div>';
+    }
+
+    function wireReportsControls() {
+      var search = document.getElementById('reports-search');
+      if (search) {
+        search.addEventListener('input', function () {
+          reportsFilters.search = search.value.trim();
+          clearTimeout(reportsSearchTimer);
+          reportsSearchTimer = setTimeout(loadReports, 300);
+        });
+      }
+
+      // Period chips (all time / this month / last 30 days / this year)
+      var periodRow = document.getElementById('reports-period-chips');
+      if (periodRow) {
+        periodRow.addEventListener('click', function (e) {
+          var chip = e.target.closest('[data-period]');
+          if (!chip) return;
+          // handled centrally by the global click delegation below via reports-period action
+        });
+      }
+
+      // Service-type chips
+      var typeRow = document.getElementById('reports-type-chips');
+      if (typeRow) {
+        typeRow.addEventListener('click', function (e) {
+          var chip = e.target.closest('.chip');
+          if (!chip) return;
+          typeRow.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('active'); });
+          chip.classList.add('active');
+          reportsFilters.service_type = chip.dataset.value || '';
+          loadReports();
+        });
+      }
     }
 
     /* -------------------------------------------------------------------- */
@@ -1006,6 +1208,22 @@
         var action = actionEl.dataset.action;
         var id = actionEl.dataset.id;
         switch (action) {
+          case 'filter-fleet': navigateFleetWithFilter(actionEl.dataset.filterStatus); return;
+          case 'goto-reports':
+            navigate('reports', { date_from: actionEl.dataset.dateFrom || '' });
+            return;
+          case 'reports-period':
+            var pd = periodDates(actionEl.dataset.period);
+            reportsFilters.period   = actionEl.dataset.period;
+            reportsFilters.date_from = pd.date_from;
+            reportsFilters.date_to   = pd.date_to;
+            // Sync chip active state
+            var pRow = document.getElementById('reports-period-chips');
+            if (pRow) pRow.querySelectorAll('[data-period]').forEach(function (c) {
+              c.classList.toggle('active', c.dataset.period === actionEl.dataset.period);
+            });
+            loadReports();
+            return;
           case 'open-vehicle': navigate('detail', { id: id }); return;
           case 'log-service':  navigate('log', { id: id }); return;
           case 'edit-vehicle': navigate('add', { id: id }); return;
@@ -1064,7 +1282,8 @@
       saveScheduleRule: function (rule) { return callServer('saveScheduleRule', [rule]); },
       uploadPhoto: function (vehicleId, dataUrl, filename) {
         return callServer('uploadPhoto', [vehicleId, dataUrl, filename]);
-      }
+      },
+      listServiceRecords: function (filters) { return callServer('listServiceRecords', [filters]); }
     };
 
     /* -------------------------------------------------------------------- */
@@ -1089,6 +1308,7 @@
       if (app) app.classList.remove('hidden');
       if (header) header.classList.remove('hidden');
       wireFleetControls();
+      wireReportsControls();
       navigate('dashboard');
     }
 

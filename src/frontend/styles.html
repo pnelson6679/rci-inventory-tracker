@@ -147,6 +147,16 @@
   .metric--overdue .num { color: var(--overdue); }
   .metric--due .num { color: #b07c00; }
   .metric--ok .num { color: var(--up-to-date); }
+  .metric--clickable {
+    cursor: pointer; border: none; text-align: left; width: 100%;
+    transition: background .15s, box-shadow .15s, transform .1s;
+  }
+  .metric--clickable:hover {
+    background: #eaecf0; box-shadow: var(--shadow);
+  }
+  .metric--clickable:active { transform: scale(.98); }
+  .metric--overdue.metric--clickable:hover { background: #fdecea; }
+  .metric--due.metric--clickable:hover { background: #fef9e7; }
 
   /* ----- Vehicle cards ---------------------------------------------------- */
   .vehicle-grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
@@ -334,6 +344,38 @@
   .success-icon { font-size: 3rem; margin-bottom: 14px; line-height: 1; }
   .success-title { font-size: 1.3rem; font-weight: 800; margin-bottom: 10px; }
   .success-msg { margin-bottom: 24px; }
+
+  /* ----- Service Reports -------------------------------------------------- */
+  .reports-meta {
+    font-size: .82rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .4px;
+    margin-bottom: 12px; padding: 0 2px;
+  }
+  .report-list { display: flex; flex-direction: column; gap: 10px; }
+  .report-record {
+    background: var(--card); border: 1px solid var(--card-line);
+    border-radius: var(--radius); padding: 14px 16px;
+  }
+  .rr-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 6px;
+  }
+  .rr-vehicle {
+    font-weight: 700; font-size: .95rem;
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--primary); text-align: left;
+    transition: color .12s;
+  }
+  .rr-vehicle:hover { color: var(--primary-press); text-decoration: underline; }
+  .rr-right {
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap;
+  }
+  .rr-date { font-size: .82rem; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .rr-desc {
+    font-size: .9rem; color: var(--ink);
+    margin-bottom: 6px; line-height: 1.4;
+  }
+  .rr-meta { font-size: .8rem; color: var(--muted); }
 
   /* ----- Responsive ------------------------------------------------------- */
   @media (min-width: 600px) {
