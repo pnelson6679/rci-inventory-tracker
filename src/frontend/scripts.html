@@ -225,14 +225,40 @@
     /* -------------------------------------------------------------------- */
     var NAV_VIEWS = { dashboard: 1, fleet: 1, reports: 1, add: 1 }; // top-nav views
 
+    var DASHBOARD_VIEWS = { dashboard: 1, fleet: 1, reports: 1 };
+
+    function closeDashboardDropdown() {
+      var menu = document.getElementById('dashboard-nav-menu');
+      if (menu) menu.classList.add('hidden');
+    }
+    function toggleDashboardDropdown() {
+      var menu = document.getElementById('dashboard-nav-menu');
+      if (menu) menu.classList.toggle('hidden');
+    }
+
     function navigate(name, params) {
       hideError();
       document.querySelectorAll('.view').forEach(function (v) {
         v.classList.toggle('active', v.id === 'view-' + name);
       });
-      document.querySelectorAll('.nav-btn').forEach(function (b) {
+
+      // Dashboard dropdown button is active for dashboard / fleet / reports.
+      var dashBtn = document.getElementById('dashboard-nav-btn');
+      if (dashBtn) dashBtn.classList.toggle('active', !!DASHBOARD_VIEWS[name]);
+
+      // Dropdown items — highlight the current one.
+      document.querySelectorAll('.nav-drop-item').forEach(function (item) {
+        item.classList.toggle('active', item.dataset.view === name);
+      });
+
+      // All other nav-btn elements (Add Vehicle).
+      document.querySelectorAll('.nav-btn:not(#dashboard-nav-btn)').forEach(function (b) {
         b.classList.toggle('active', b.dataset.view === name);
       });
+
+      // Close the dropdown whenever any navigation happens.
+      closeDashboardDropdown();
+
       window.scrollTo(0, 0);
 
       switch (name) {
@@ -1197,6 +1223,10 @@
     /* Global event delegation                                              */
     /* -------------------------------------------------------------------- */
     document.addEventListener('click', function (e) {
+      // Close dashboard dropdown on outside click.
+      var dropWrap = document.getElementById('dashboard-nav-wrap');
+      if (dropWrap && !dropWrap.contains(e.target)) closeDashboardDropdown();
+
       // Modal close (backdrop or X)
       if (e.target.closest('[data-modal-close]') ||
           (e.target.matches && e.target.matches('[data-modal-backdrop]'))) {
@@ -1208,6 +1238,8 @@
         var action = actionEl.dataset.action;
         var id = actionEl.dataset.id;
         switch (action) {
+          case 'toggle-dashboard-dropdown': toggleDashboardDropdown(); return;
+          case 'dropdown-navigate': navigate(actionEl.dataset.view); return;
           case 'filter-fleet': navigateFleetWithFilter(actionEl.dataset.filterStatus); return;
           case 'goto-reports':
             navigate('reports', { date_from: actionEl.dataset.dateFrom || '' });

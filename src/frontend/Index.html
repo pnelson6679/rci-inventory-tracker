@@ -47,9 +47,18 @@
     <header class="app-header hidden">
       <h1>RCI Inventory Tracker</h1>
       <nav class="app-nav">
-        <button data-view="dashboard" class="nav-btn active">Dashboard</button>
-        <button data-view="fleet" class="nav-btn">Fleet</button>
-        <button data-view="reports" class="nav-btn">Reports</button>
+        <!-- Dashboard dropdown: Fleet + Reports live inside it -->
+        <div class="nav-drop-wrap" id="dashboard-nav-wrap">
+          <button class="nav-btn active" id="dashboard-nav-btn"
+                  data-action="toggle-dashboard-dropdown">
+            Dashboard <span class="nav-caret">▾</span>
+          </button>
+          <div class="nav-drop-menu hidden" id="dashboard-nav-menu">
+            <button class="nav-drop-item" data-action="dropdown-navigate" data-view="dashboard">Dashboard</button>
+            <button class="nav-drop-item" data-action="dropdown-navigate" data-view="fleet">Fleet</button>
+            <button class="nav-drop-item" data-action="dropdown-navigate" data-view="reports">Reports</button>
+          </div>
+        </div>
         <button data-view="add" class="nav-btn">+ Add Vehicle</button>
         <button data-action="open-service-picker" class="nav-btn">+ Add Service</button>
       </nav>
