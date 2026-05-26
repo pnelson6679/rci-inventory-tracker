@@ -29,5 +29,7 @@ function Drive_savePhoto(vehicleId, dataUrl, filename) {
   var folder = getVehicleFolder_(vehicleId);
   var file = folder.createFile(blob);
   file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  return file.getUrl();
+  // Return a thumbnail URL (w1200) rather than the viewer page.
+  // Thumbnail URLs are directly usable as <img src> for publicly-shared files.
+  return 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w1200';
 }

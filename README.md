@@ -142,10 +142,13 @@ clasp deploy --description "v1 initial deploy"
 
 Or in the editor: **Deploy → New deployment → Web app**, with:
 - **Execute as:** *User deploying* (so only you need BigQuery/Drive access — see access note below)
-- **Who has access:** *Anyone with a Google account*
+- **Who has access:** *Anyone* (the app runs its own Google sign-in; see "Access model" below)
 
-Copy the web-app URL and open it. Accounts on the `ALLOWLIST` get the app; everyone else
-gets an "Access denied" page.
+Copy the web-app URL and open it. Accounts on the `ALLOWLIST` can sign in and use the app;
+everyone else is blocked at sign-in.
+
+> **Before the app will let anyone in, you must complete the one-time sign-in setup**
+> (next-but-one section). Until then, even you will be stopped at the sign-in screen.
 
 ### 8. (Optional) Turn on CI deploys
 
@@ -155,24 +158,67 @@ gets an "Access denied" page.
 
 ---
 
-## Access model (email whitelist)
+## Access model (Google sign-in + email allowlist)
 
-Apps Script web apps can't natively restrict to an arbitrary email list, so access is
-enforced in two layers:
+The crew is on personal Gmail, not a Workspace domain. That rules out the old trick of
+reading `Session.getActiveUser().getEmail()` — under *Execute as: me* Google returns an
+**empty** email for any visitor who isn't the owner, so a `doGet`-level check would deny
+everyone. Instead the app runs its own lightweight **"Sign in with Google"** flow:
 
-1. **Deployment** set to *Anyone with a Google account* forces sign-in, which gives us the
-   visitor's email.
-2. **`doGet` checks that email** against `CONFIG.ALLOWLIST` and shows an "Access denied"
-   page to anyone not listed.
+1. The app is deployed **Execute as: me**, so photo uploads land in *your* Drive and only
+   *you* need BigQuery/Drive access. End users never authorize those scopes.
+2. On first visit the browser shows a **Sign in with Google** button. It sends the visitor
+   through Google OAuth requesting only the non-sensitive `openid email` scopes.
+3. The server (`Auth.gs`) verifies the returned email, checks it against `CONFIG.ALLOWLIST`,
+   and — if allowed — issues a short-lived **HMAC-signed session token**. The browser stores
+   it in `localStorage` and replays it on every `google.script.run` call.
+4. **Every server endpoint calls `requireAuth_(token)`** before doing any work, re-checking
+   the allowlist each time. So even a logged-in stranger who pokes at the endpoints directly
+   is rejected, and removing someone from the allowlist locks them out immediately.
 
-Add or remove crew members by editing `CONFIG.ALLOWLIST` in `Utils.gs` and running `clasp push`.
+Add or remove crew members by editing `CONFIG.ALLOWLIST` in `Utils.gs` and running
+`./release.sh` (or `clasp push` + redeploy). **No GCP console change is needed to add a person.**
 
-> **Gotcha:** `Session.getActiveUser().getEmail()` reliably returns the visitor's email when
-> everyone is on the same Google Workspace domain. For mixed consumer Gmail accounts it can
-> come back empty under *Execute as: User deploying*. If your crew uses personal Gmail, switch
-> the deployment to **Execute as: User accessing** — but then each user also needs BigQuery
-> read/write access on the GCP project (or front the data layer with a service account).
-> Decide this with the team before launch.
+### One-time sign-in setup
+
+Because the data project (`rci-inventory`) requests the restricted Drive scope, its OAuth
+consent screen has to stay in **Testing** (publishing it would force Google verification —
+which we're avoiding). A consent screen in Testing only lets *test users* authorize it, which
+is exactly the cap we're trying to escape. The fix is to put the **sign-in** OAuth client in
+its **own, separate GCP project** whose consent screen uses only the non-sensitive `email`
+scope — that one can be published to production with **no verification and no user cap**.
+
+1. **Create a second GCP project** (e.g. "RCI Sign-In") at
+   <https://console.cloud.google.com/projectcreate>. (You can technically reuse `rci-inventory`
+   instead, but then every crew member must be added as a *test user* — the very thing we're
+   avoiding. A separate project skips that.)
+2. In that project: **APIs & Services → OAuth consent screen** → User type **External** →
+   fill in app name + your email. On the Scopes step, add **only**
+   `.../auth/userinfo.email` (and `openid`) — do **not** add any sensitive/restricted scopes.
+   Then **Publish app → Production**. Because the only scope is non-sensitive, Google does
+   **not** require verification and there is **no 100-user cap**.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** → type
+   **Web application**. Under **Authorized redirect URIs** add your exact web-app `/exec` URL:
+   `https://script.google.com/macros/s/AKfycbwH1YMlQn3kZ8ws7XFMshpx8M4G9__aliEi4MOO22Uwoll1JZeELVkhurNBn2vOmW2q/exec`
+   Copy the **Client ID** and **Client secret**.
+4. In the **Apps Script editor** (this project): **Project Settings (gear) → Script Properties**
+   → add two properties:
+   - `OAUTH_CLIENT_ID` = the client ID from step 3
+   - `OAUTH_CLIENT_SECRET` = the client secret from step 3
+5. Still in the editor, open `backend/Auth.gs`, pick **`generateSessionSecret`** from the
+   function dropdown, and click **Run** once. That writes a random `SESSION_SECRET` to Script
+   Properties. (Re-running it later just logs everyone out — harmless.)
+6. Make sure your web-app URL is registered in step 3 **exactly** (Google requires an exact
+   match, including the trailing `/exec`). If you ever create a brand-new deployment with a
+   different URL, add that URL to the client's redirect URIs too.
+
+That's it — keep `rci-inventory` in **Testing** with just yourself; end users only ever touch
+the separate sign-in project, which is production and uncapped.
+
+> **Why a session token instead of re-checking on each page load?** Apps Script web apps are
+> stateless and can't set cookies, so the signed token (kept in `localStorage`) is what lets a
+> crew member stay signed in across refreshes. Tokens expire after 12 hours (`SESSION_TTL_SECONDS`
+> in `Auth.gs`); after that they sign in again — one click, no re-consent.
 
 ---
 

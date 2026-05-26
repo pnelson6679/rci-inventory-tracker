@@ -6,11 +6,43 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>RCI Inventory Tracker</title>
     <?!= include('frontend/styles'); ?>
+    <style>
+      /* Sign-in gate — shown until the visitor has a valid session token. */
+      .login-gate {
+        position: fixed; inset: 0; z-index: 1000;
+        display: flex; align-items: center; justify-content: center;
+        background: #f5f6f8; padding: 24px;
+      }
+      .login-card {
+        background: #fff; border-radius: 14px; padding: 36px 28px; max-width: 380px; width: 100%;
+        box-shadow: 0 10px 40px rgba(0,0,0,.08); text-align: center;
+      }
+      .login-card h1 { font-size: 1.35rem; margin: 0 0 6px; }
+      .login-card p { color: #5f6368; margin: 0 0 22px; }
+      .login-card .btn { width: 100%; }
+      #login-msg { color: #b3261e; min-height: 1.2em; margin: 16px 0 0; font-size: .9rem; }
+      .hidden { display: none !important; }
+    </style>
   </head>
   <body>
+    <script>
+      // Injected server-side: the Google sign-in URL for this deployment.
+      window.__RCI_AUTH_URL__ = <?!= JSON.stringify(AUTH_URL) ?>;
+    </script>
+
+    <!-- Sign-in gate. Hidden once a valid session is established. -->
+    <div id="login-gate" class="login-gate hidden">
+      <div class="login-card">
+        <h1>RCI Inventory Tracker</h1>
+        <p>Sign in with your Google account to continue.</p>
+        <button id="login-btn" type="button" class="btn btn-primary btn-lg">Sign in with Google</button>
+        <p id="login-msg"></p>
+      </div>
+    </div>
+
     <!-- Single-page app shell. Views swap client-side (see frontend/scripts).
          Mobile-first. Five views: dashboard, fleet, detail, add (also edit), log. -->
-    <header class="app-header">
+    <header class="app-header hidden">
       <h1>RCI Inventory Tracker</h1>
       <nav class="app-nav">
         <button data-view="dashboard" class="nav-btn active">Dashboard</button>
@@ -20,7 +52,7 @@
       </nav>
     </header>
 
-    <main id="app-root">
+    <main id="app-root" class="hidden">
       <!-- Global error banner (shown above whichever view is active). -->
       <div id="error-banner" class="error-banner hidden" role="alert"></div>
 

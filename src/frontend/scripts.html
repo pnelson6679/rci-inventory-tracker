@@ -53,14 +53,38 @@
     'use strict';
 
     /* -------------------------------------------------------------------- */
-    /* Server-call helper (promisified google.script.run)                   */
+    /* Session + server-call helper (promisified google.script.run)         */
     /* -------------------------------------------------------------------- */
+    // The signed session token minted by the server after Google sign-in.
+    // It is prepended to EVERY server call; each endpoint validates it.
+    var SESSION = null;
+    var SESSION_KEY = 'rci_session';
+
+    function getStoredSession() {
+      try { return localStorage.getItem(SESSION_KEY) || null; } catch (e) { return null; }
+    }
+    function clearStoredSession() {
+      try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    }
+
     function callServer(fn, args) {
       return new Promise(function (resolve, reject) {
+        var all = [SESSION].concat(args || []); // token is always the first argument
         google.script.run
           .withSuccessHandler(resolve)
-          .withFailureHandler(reject)
-          [fn].apply(null, args || []);
+          .withFailureHandler(function (err) {
+            // Session expired or revoked → drop to the sign-in screen.
+            var msg = (err && err.message) ? err.message : '';
+            if (/AUTH_REQUIRED|AUTH_FORBIDDEN/.test(msg)) {
+              clearStoredSession();
+              SESSION = null;
+              showLoginGate(msg.indexOf('FORBIDDEN') >= 0
+                ? 'Your account is no longer on the access list.'
+                : 'Your session expired. Please sign in again.');
+            }
+            reject(err);
+          })
+          [fn].apply(null, all);
       });
     }
 
@@ -110,6 +134,30 @@
       var s = status || 'no_schedule';
       return '<span class="badge badge--' + s + '">' +
              escapeHtml(STATUS_LABEL[s] || 'No Schedule') + '</span>';
+    }
+
+    /**
+     * Converts a Google Drive share / viewer URL to a thumbnail URL that can be
+     * used directly as an <img src>.  Any URL that already points to a thumbnail
+     * or non-Drive host is returned unchanged.
+     *
+     * Handles the two common Drive formats stored by Drive_savePhoto:
+     *   https://drive.google.com/file/d/FILE_ID/view
+     *   https://drive.google.com/open?id=FILE_ID
+     */
+    function driveImgUrl(url) {
+      if (!url) return url;
+      // Already a thumbnail URL — use as-is.
+      if (url.indexOf('drive.google.com/thumbnail') >= 0) return url;
+      // Extract file ID from /file/d/FILE_ID/... URLs.
+      var m = url.match(/\/file\/d\/([^/?#]+)/);
+      if (m) return 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1200';
+      // Extract file ID from ?id=FILE_ID or &id=FILE_ID query params.
+      m = url.match(/[?&]id=([^&]+)/);
+      if (m && url.indexOf('drive.google.com') >= 0) {
+        return 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1200';
+      }
+      return url;
     }
 
     // photo_urls may arrive as a JSON string or an array; normalize to array.
@@ -337,8 +385,16 @@
         var schedules = (data.schedules || []).filter(function (r) { return r.active !== false; });
         var records = data.records || [];
 
-        var photo = v.photo_url
-          ? '<img class="detail-photo" src="' + escapeHtml(v.photo_url) + '" alt="' + escapeHtml(v.name) + '">'
+        // If no key picture is set, fall back to the most recent service photo.
+        var displayPhotoUrl = v.photo_url;
+        if (!displayPhotoUrl) {
+          for (var ri = 0; ri < records.length; ri++) {
+            var svcPhotos = parsePhotoUrls(records[ri].photo_urls);
+            if (svcPhotos.length) { displayPhotoUrl = svcPhotos[0]; break; }
+          }
+        }
+        var photo = displayPhotoUrl
+          ? '<img class="detail-photo" src="' + escapeHtml(driveImgUrl(displayPhotoUrl)) + '" alt="' + escapeHtml(v.name) + '">'
           : '<div class="detail-photo detail-photo--placeholder">' + typeIcon(v.type) + '</div>';
 
         var sub = [v.year, v.make, v.model].filter(Boolean).join(' ');
@@ -437,7 +493,7 @@
       var photosHTML = photos.length
         ? '<div class="record-photos">' + photos.map(function (u) {
             return '<a href="' + escapeHtml(u) + '" target="_blank" rel="noopener">' +
-                   '<img src="' + escapeHtml(u) + '" alt="service photo" loading="lazy"></a>';
+                   '<img src="' + escapeHtml(driveImgUrl(u)) + '" alt="service photo" loading="lazy"></a>';
           }).join('') + '</div>'
         : '';
       var excerpt = (rec.description || '').replace(/\s+/g, ' ').slice(0, 80);
@@ -1012,11 +1068,65 @@
     };
 
     /* -------------------------------------------------------------------- */
+    /* Sign-in gate                                                         */
+    /* -------------------------------------------------------------------- */
+    function showLoginGate(message) {
+      var gate = $('#login-gate');
+      var app = $('#app-root');
+      var header = document.querySelector('.app-header');
+      if (gate) gate.classList.remove('hidden');
+      if (app) app.classList.add('hidden');
+      if (header) header.classList.add('hidden');
+      var msg = $('#login-msg');
+      if (msg) msg.textContent = message || '';
+    }
+
+    function showApp() {
+      var gate = $('#login-gate');
+      var app = $('#app-root');
+      var header = document.querySelector('.app-header');
+      if (gate) gate.classList.add('hidden');
+      if (app) app.classList.remove('hidden');
+      if (header) header.classList.remove('hidden');
+      wireFleetControls();
+      navigate('dashboard');
+    }
+
+    function startApp() {
+      var stored = getStoredSession();
+      if (!stored) { showLoginGate(); return; }
+      // Validate the stored token server-side before showing the app.
+      SESSION = stored;
+      google.script.run
+        .withSuccessHandler(function (who) {
+          if (who && who.email) {
+            showApp();
+          } else {
+            clearStoredSession();
+            SESSION = null;
+            showLoginGate();
+          }
+        })
+        .withFailureHandler(function () {
+          clearStoredSession();
+          SESSION = null;
+          showLoginGate('Could not verify your session. Please sign in again.');
+        })
+        .whoami(stored);
+    }
+
+    /* -------------------------------------------------------------------- */
     /* Boot                                                                 */
     /* -------------------------------------------------------------------- */
     document.addEventListener('DOMContentLoaded', function () {
-      wireFleetControls();
-      navigate('dashboard');
+      var loginBtn = document.getElementById('login-btn');
+      if (loginBtn) {
+        loginBtn.addEventListener('click', function () {
+          var url = window.__RCI_AUTH_URL__;
+          if (url) { window.top.location.href = url; }
+        });
+      }
+      startApp();
     });
   })();
 </script>

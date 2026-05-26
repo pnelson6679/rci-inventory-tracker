@@ -18,9 +18,12 @@ var CONFIG = {
   DRIVE_ROOT_FOLDER_ID: '16sSxaVBXUHcW7y807gomEUqjII_0fH9o',
 
   // Email allowlist — only these accounts can open the web app.
-  // Add the whole crew here. Case-insensitive.
+  // Add the whole crew here. Case-insensitive. After editing, run ./release.sh
+  // (or clasp push + redeploy) — no GCP/console change is needed to add a person.
   ALLOWLIST: [
-    'pnelson6679@gmail.com'
+    'pnelson6679@gmail.com',
+    'davvradd@gmail.com'
+    // , 'crewmember@gmail.com'   ← add the rest of the crew here
   ]
 };
 
