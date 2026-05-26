@@ -1093,9 +1093,19 @@
     }
 
     function startApp() {
+      // 1) Just signed in? The server injected a fresh token into the page.
+      //    Trust it, persist it for next time, and go straight to the app.
+      var injected = (typeof window.__RCI_SESSION__ === 'string') ? window.__RCI_SESSION__ : '';
+      if (injected) {
+        SESSION = injected;
+        try { localStorage.setItem(SESSION_KEY, injected); } catch (e) {}
+        showApp();
+        return;
+      }
+
+      // 2) Returning visit: use the stored token, validated server-side first.
       var stored = getStoredSession();
       if (!stored) { showLoginGate(); return; }
-      // Validate the stored token server-side before showing the app.
       SESSION = stored;
       google.script.run
         .withSuccessHandler(function (who) {

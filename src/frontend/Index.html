@@ -26,8 +26,10 @@
   </head>
   <body>
     <script>
-      // Injected server-side: the Google sign-in URL for this deployment.
+      // Injected server-side: the Google sign-in URL for this deployment, and
+      // (only right after a successful sign-in) the freshly minted session token.
       window.__RCI_AUTH_URL__ = <?!= JSON.stringify(AUTH_URL) ?>;
+      window.__RCI_SESSION__  = <?!= JSON.stringify(SESSION_TOKEN) ?>;
     </script>
 
     <!-- Sign-in gate. Hidden once a valid session is established. -->

@@ -19,25 +19,36 @@
  */
 
 /**
- * Entry point for every GET. Two jobs:
- *   1. If Google redirected back with ?code=, finish sign-in (see Auth.gs).
- *   2. Otherwise serve the SPA shell. The shell decides — client-side — whether to
- *      show the sign-in screen or the app, based on the stored session token.
+ * Entry point for every GET. Always renders the SPA shell; the only variation is
+ * whether we hand the page a fresh session token.
+ *
+ *   - If Google redirected back with ?code=, we finish sign-in here. On success
+ *     we inject the new token into the page (no browser redirect — the sandbox
+ *     iframe can't navigate the top window without a click). A non-allowlisted
+ *     account gets the "access denied" page.
+ *   - Otherwise (or if the code was stale/invalid) we serve the plain shell, and
+ *     the client decides client-side: use a stored token, or show the sign-in
+ *     screen.
  */
 function doGet(e) {
   e = e || {};
   var p = e.parameter || {};
 
-  // 1) OAuth sign-in callback.
+  var injectedToken = '';
   if (p.code) {
-    return handleOAuthCallback_(p);
+    var res = handleOAuthSignin_(p);
+    if (res.status === 'denied') {
+      return accessDeniedPage_(res.email);
+    }
+    if (res.status === 'ok') {
+      injectedToken = res.token; // fall through and render the app with this token
+    }
+    // 'error' → fall through to the plain shell; a stored session (if any) still works.
   }
 
-  // 2) Serve the app shell. AUTH_URL is read by the client to power the
-  //    "Sign in with Google" button. No server-side identity gating here —
-  //    the individual endpoints enforce the allowlist on every call.
   var tmpl = HtmlService.createTemplateFromFile('frontend/Index');
   tmpl.AUTH_URL = buildAuthUrl_();
+  tmpl.SESSION_TOKEN = injectedToken; // '' when not just signed in
   return tmpl.evaluate()
     .setTitle('RCI Inventory Tracker')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')

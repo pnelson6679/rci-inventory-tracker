@@ -97,14 +97,23 @@ function buildAuthUrl_() {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Exchanges the auth code for tokens, extracts the verified email, checks the
- * allowlist, and returns an HtmlOutput that stores a session token in the
- * browser and bounces back to the clean app URL.
+ * Exchanges the auth code for tokens, extracts the verified email, and checks
+ * the allowlist. Returns a small status object that doGet acts on:
+ *
+ *   { status: 'ok',     token, email }  → mint a session; render the app
+ *   { status: 'denied', email }         → show the "not on the list" page
+ *   { status: 'error' }                 → fall back to the normal shell
+ *
+ * NOTE: we deliberately do NOT return an HTML page that tries to redirect the
+ * browser. The Apps Script sandbox iframe blocks a script from navigating the
+ * top window without a user click, which left users stuck on a blank page.
+ * Instead doGet renders the app directly and injects the token inline.
  */
-function handleOAuthCallback_(p) {
+function handleOAuthSignin_(p) {
   // CSRF: the state we issued must verify and not be expired.
   if (!p.state || !verifyState_(p.state)) {
-    return authMessagePage_('Sign-in expired', 'Your sign-in link expired or was invalid. Please try again.', true);
+    Logger.log('Sign-in: missing/expired state.');
+    return { status: 'error' };
   }
 
   var tokenResp;
@@ -121,11 +130,16 @@ function handleOAuthCallback_(p) {
       }
     });
   } catch (err) {
-    return authMessagePage_('Sign-in failed', 'Could not reach Google to complete sign-in. Please try again.', true);
+    Logger.log('Sign-in: token endpoint unreachable: ' + err);
+    return { status: 'error' };
   }
 
   if (tokenResp.getResponseCode() !== 200) {
-    return authMessagePage_('Sign-in failed', 'Google rejected the sign-in. Double-check the OAuth client setup. ', true);
+    // Most common while debugging: client ID/secret mismatch or redirect_uri not
+    // registered. Also fires harmlessly when an already-used code is replayed
+    // (e.g. the user refreshed the ?code= URL).
+    Logger.log('Sign-in: token exchange HTTP ' + tokenResp.getResponseCode() + ' — ' + tokenResp.getContentText());
+    return { status: 'error' };
   }
 
   var idToken = (JSON.parse(tokenResp.getContentText()) || {}).id_token;
@@ -134,29 +148,24 @@ function handleOAuthCallback_(p) {
   var verified = claims && (claims.email_verified === true || claims.email_verified === 'true');
 
   if (!email || !verified) {
-    return authMessagePage_('Sign-in failed', 'Google did not return a verified email address.', true);
+    Logger.log('Sign-in: no verified email in id_token.');
+    return { status: 'error' };
   }
 
   if (!isAllowed_(email)) {
-    return authMessagePage_(
-      'Access denied',
-      'The account <b>' + escapeForHtml_(email) + '</b> is not on the access list. Ask the fleet admin to add you.',
-      true
-    );
+    return { status: 'denied', email: email };
   }
 
-  var session = makeSessionToken_(email);
-  // Store the token and return to the clean app URL (drops the ?code from the bar).
-  var url = webAppUrl_();
-  var html = '<!DOCTYPE html><html><head><base target="_top"><meta charset="utf-8"></head><body>' +
-    '<script>' +
-    'try{localStorage.setItem("rci_session", ' + JSON.stringify(session) + ');}catch(e){}' +
-    'window.top.location.href=' + JSON.stringify(url) + ';' +
-    '</script>' +
-    '<p style="font-family:sans-serif;padding:24px">Signing you in…</p>' +
-    '</body></html>';
-  return HtmlService.createHtmlOutput(html)
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return { status: 'ok', token: makeSessionToken_(email), email: email };
+}
+
+/** The "your account isn't on the access list" page (static, no redirect needed). */
+function accessDeniedPage_(email) {
+  return authMessagePage_(
+    'Access denied',
+    'The account <b>' + escapeForHtml_(email) + '</b> is not on the access list. Ask the fleet admin to add you.',
+    true
+  );
 }
 
 /** Small standalone HTML page for sign-in errors / notices. */
